@@ -1,8 +1,8 @@
 
-import { app, ipcMain, Tray, Menu } from 'electron'
-import DB from './db'
+import { app, ipcMain, Tray, Menu } from "electron"
+import DB from "./db"
 
-import path from 'path'
+import path from "path"
 import pkg from "../../package.json"
 
 const userData = app.getPath("userData")
@@ -24,24 +24,24 @@ export function initExt () {
   const storePath = getDataPath()
   DB.initDB(storePath)
 
-  const firstRun = DB.get('setting.firstRun')
-  console.log('调用中', firstRun)
+  const firstRun = DB.get("setting.firstRun")
+  console.log("调用中", firstRun)
   if (firstRun) {
     //首次运行设置开机自启动
     setOpenAtLogin(true)
-    DB.set('setting.firstRun', false)
+    DB.set("setting.firstRun", false)
   }
 }
 
 //初始化托盘
 export function initTray (setPosition) {
   //设置托盘图标
-  tray = new Tray(path.join(__static, process.platform != 'darwin' ? './tray.png' : './tray-mac.png'))
+  tray = new Tray(path.join(__static, process.platform != "darwin" ? "./tray.png" : "./tray-mac.png"))
   //设置托盘参数
   const trayItems = Menu.buildFromTemplate([
     {
-      label: '开机自启动',
-      type: 'checkbox',
+      label: "开机自启动",
+      type: "checkbox",
       checked: getOpenAtLogin,
       click () {
         const openAtLogin = getOpenAtLogin()
@@ -49,8 +49,8 @@ export function initTray (setPosition) {
       }
     },
     {
-      label: '退出',
-      role: 'quit'
+      label: "退出",
+      role: "quit"
     }
   ])
 
@@ -59,13 +59,13 @@ export function initTray (setPosition) {
   //设置项目名
   tray.setToolTip(pkg.name)
   //设置点击事件
-  tray.on('click', (event, bounds, position) => {
+  tray.on("click", (event, bounds, position) => {
     setPosition()
   })
 }
 export function createAppMenu () {
   const template = [
-    // { role: 'appMenu' }
+    // { role: "appMenu" }
     ...(process.platform === "darwin"
       ? [
         {
