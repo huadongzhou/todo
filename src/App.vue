@@ -1,10 +1,10 @@
 <template>
-  <div id="app-container">
+  <div class="app-container" :class="{ unfocused: ignoreMouse }">
     <!-- 遮挡层 处理鼠标事件 -->
     <div class="mask"></div>
     <div class="todo-nav">
       <div class="todo-tabs">
-        <router-link draggable="false" to="/todoList">Todo</router-link>
+        <router-link draggable="false" to="/">Todo</router-link>|
         <router-link draggable="false" to="/doneList">Done</router-link>
       </div>
       <div class="todo-tools">
@@ -30,13 +30,12 @@
 </template>
 
 <script>
-import { defineComponent } from 'vue'
 import { ipcRenderer } from 'electron'
 
-export default defineComponent({
+export default {
   data () {
     return {
-      ignoreMouse: false,
+      ignoreMouse: true,
     }
   },
   methods: {
@@ -47,13 +46,17 @@ export default defineComponent({
       ipcRenderer.invoke("hideWindow")
     }
   }
-})
+}
 </script>
 
 <style lang="scss">
-#app-container {
+.app-container {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  background-color: rgba($color: #000000, $alpha: 0.3);
+  border-radius: 5px;
   .mask {
     display: none;
     position: absolute;
@@ -96,19 +99,20 @@ export default defineComponent({
   .todo-content {
     flex: 1;
     margin: 10px 0;
-    overflow: auto;
+    overflow-y: auto;
     &:hover::-webkit-scrollbar-thumb {
       display: block;
     }
   }
 }
-#app.unfocused {
-  opacity: 0.8;
+.app-container.unfocused {
+  opacity: 0.1;
+  background-color: rgba($color: #000000, $alpha: 0.1);
   .mask {
     display: block;
   }
-  .tools {
-    z-index: 1000;
+  .todo-nav {
+    z-index: 10000;
   }
 }
 </style>

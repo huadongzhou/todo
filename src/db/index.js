@@ -1,3 +1,5 @@
+
+import { ipcRenderer } from 'electron'
 import lowdb from 'lowdb'
 import lodashId from 'lodash-id'
 import FileSync from 'lowdb/adapters/FileSync'
@@ -9,8 +11,23 @@ const isDevelopment = process.env.mode != 'production'
 let db
 
 const DB = {
+  init () {
+    return new Promise((resolve) => {
+      ipcRenderer.invoke("getuserPath").then(userPath => {
+        const DBPath = isDevelopment ? '/data-dev.json' : '/data.json'
+
+        const adapter = new FileSync(path.join(userPath, DBPath))
+
+        db = lowdb(adapter)
+
+        db._.mixin(lodashId)
+
+        resolve()
+        console.log('init初始化')
+      })
+    })
+  },
   initDB (storePath) {
-    console.log('初始化中')
     if (fs.pathExistsSync(storePath)) {
       fs.mkdirpSync(storePath)
     }
@@ -32,7 +49,6 @@ const DB = {
     if (!this.has("settings.firstRun")) {
       this.set("settings.firstRun", true)
     }
-    console.log('初始化完成', this.get("settings.firstRun"))
   },
   has (key) {
     return db
@@ -57,6 +73,14 @@ const DB = {
       .read()
       .get(key)
       .insert(value)
+      .write()
+  },
+  update (key, match, value) {
+    return db
+      .read()
+      .get(key)
+      .find(match)
+      .assign(value)
       .write()
   },
   removeById (key, id) {

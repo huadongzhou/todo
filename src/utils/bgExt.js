@@ -1,35 +1,29 @@
 
 import { app, ipcMain, Tray, Menu } from "electron"
-import DB from "./db"
+import DB from "@/db"
 
 import path from "path"
 import pkg from "../../package.json"
 
-const userData = app.getPath("userData")
+const userPath = app.getPath("userData")
+
 //外置防止内存清理释放托盘
 let tray
 
-export function getDataPath () {
-  return app.getPath("userData")
-}
-
-ipcMain.handle("getDataPath", event => {
-  return getDataPath()
+ipcMain.handle('getuserPath', () => {
+  return userPath
 })
-
-
 //初始化拓展
 export function initExt () {
   //初始化数据库
-  const storePath = getDataPath()
-  DB.initDB(storePath)
+  DB.initDB(userPath)
 
-  const firstRun = DB.get("setting.firstRun")
-  console.log("调用中", firstRun)
+  const firstRun = DB.get("settings.firstRun")
+  console.log('firstRun', firstRun)
   if (firstRun) {
     //首次运行设置开机自启动
     setOpenAtLogin(true)
-    DB.set("setting.firstRun", false)
+    DB.set("settings.firstRun", false)
   }
 }
 
