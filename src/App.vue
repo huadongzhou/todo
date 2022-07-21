@@ -1,5 +1,5 @@
 <template>
-  <div class="app-container" :class="{ unfocused: ignoreMouse }">
+  <div class="app-container" :class="{ unfocused: ignoreMouse,autoDisplay:autoDisplay }">
     <!-- 遮挡层 处理鼠标事件 -->
     <div class="mask"></div>
     <div class="todo-nav">
@@ -15,7 +15,7 @@
             key="lock"
             @mouseenter="setIgnoreMouseEvents(false)"
             @mouseleave="setIgnoreMouseEvents(ignoreMouse)"
-            @click="ignoreMouse = !ignoreMouse"
+            @click="lockClick"
           ></i>
         </transform-group>
       </div>
@@ -36,14 +36,22 @@ export default {
   data () {
     return {
       ignoreMouse: true,
+      autoDisplay: false
     }
   },
   methods: {
     setIgnoreMouseEvents (ignore) {
+      if (this.ignoreMouse) {
+        this.autoDisplay = !ignore
+      }
       ipcRenderer.invoke("setIgnoreMouseEvents", ignore)
     },
     hideWindow () {
       ipcRenderer.invoke("hideWindow")
+    },
+    lockClick () {
+      this.ignoreMouse = !this.ignoreMouse
+      this.autoDisplay = false
     }
   }
 }
@@ -55,7 +63,7 @@ export default {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: rgba($color: #000000, $alpha: 0.3);
+  background-color: rgba($color: #000000, $alpha: 0.4);
   border-radius: 5px;
   .mask {
     display: none;
@@ -105,14 +113,20 @@ export default {
     }
   }
 }
-.app-container.unfocused {
-  opacity: 0.1;
-  background-color: rgba($color: #000000, $alpha: 0.1);
-  .mask {
-    display: block;
+.app-container {
+  &.unfocused {
+    opacity: 0.1;
+    background-color: rgba($color: #000000, $alpha: 0.2);
+    .mask {
+      display: block;
+    }
+    .todo-nav {
+      z-index: 10000;
+    }
   }
-  .todo-nav {
-    z-index: 10000;
+  &.autoDisplay {
+    opacity: 0.3;
+    background-color: rgba($color: #000000, $alpha: 0.3);
   }
 }
 </style>

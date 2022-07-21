@@ -95,7 +95,7 @@ export default defineComponent({
       position: sticky;
       top: 0;
       z-index: -999;
-      height: 224px;
+      height: 188px;
       line-height: 180px;
       box-sizing: border-box;
       color: rgba($color: #cccccc, $alpha: 0.8);

@@ -1,11 +1,11 @@
 <template>
-  <div class="todo" @click.stop="addTodo" key="todo">
+  <div class="todo" @dblclick.stop="addTodo" key="todo">
     <vuedraggable
       class="todo-list"
       v-model="todoList"
       v-bind="dragOptions"
-      @start.stop="drag = true"
-      @end.stop="drag = false"
+      @start.stop="dragState(true,$event)"
+      @end.stop="dragState(false,$event)"
     >
       <transition-group type="transition" :name="!drag ? 'flip-list' : null">
         <div
@@ -37,16 +37,18 @@
 <script>
 import DB from '@/db'
 import { defineComponent } from "vue"
-import vuedraggable from 'vuedraggable'
+import vuedraggable from '../../node_modules/vuedraggable/src/vuedraggable'
 
 import { getDateTime, deepClone } from '@/utils'
 import CursorSpecialEffects from "@/utils/fireworks"
 export default defineComponent({
   name: 'TodoList',
-  components: [vuedraggable],
+  components: {
+    vuedraggable
+  },
   directives: {
     focus: {
-      inserted: function (el) {
+      mounted: function (el) {
         el.focus()
       }
     }
@@ -56,6 +58,12 @@ export default defineComponent({
       todoList: [
         { id: 1, content: 'kaifa' }
       ],
+      dragOptions: {
+        animation: 200,
+        group: "description",
+        disabled: false,
+        ghostClass: "ghost"
+      },
       drag: false,
       editId: '',
       editContent: '',
@@ -65,11 +73,32 @@ export default defineComponent({
     }
   },
   created () {
+    console.log(vuedraggable)
     // DB = await import('@/db')
     console.log(DB)
     this.getTodoList()
   },
   methods: {
+    dragState (state, e) {
+      this.drag = state
+      if (!state) {
+        //更新拖拽数据
+        let oldIndex = e.oldIndex
+        let newIndex = e.newIndex
+        let oldData = this.todoList.splice(oldIndex, 1)[0]
+        //判断前后
+        let index = newIndex - 1
+        // console.log('index', index)
+        if (index - 1 <= 0) {
+          this.todoList.unshift(oldData)
+        } else {
+          this.todoList.splice(index, 0, oldData)
+        }
+        //更新至数据库
+        DB.set('todoList', this.todoList)
+      }
+      console.log(e)
+    },
     getTodoList () {
       this.todoList = DB.get("todoList") || []
       console.log('数据', this.todoList)

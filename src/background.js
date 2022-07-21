@@ -1,18 +1,22 @@
 'use strict'
 
-import { app, protocol, BrowserWindow, screen, ipcMain } from 'electron'
+import path from 'path'
+import { app, protocol, BrowserWindow, screen, ipcMain, Notification } from 'electron'
 import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
-import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
+// import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
 import { autoUpdater } from 'electron-updater'
 
-process.env.GH_TOKEN = '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'
-console.log('gitPath', process.env.GH_TOKEN)
-const isDevelopment = process.env.NODE_ENV !== 'production'
+const log = require("electron-log")
 
-import { initExt, initTray, createAppMenu } from '@/utils/bgExt.js'
+import { initExt, initTray } from '@/utils/bgExt.js'
+import { checkVersion } from '@/utils/updater.js'
 import pkg from "../package.json"
 
+// console.log('gitPath', process.env.GH_TOKEN)
+const isDevelopment = process.env.NODE_ENV !== 'production'
+
 let win
+
 
 //判断实例是否被打开
 if (app.requestSingleInstanceLock()) {
@@ -28,7 +32,6 @@ if (app.requestSingleInstanceLock()) {
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { secure: true, standard: true } }
 ])
-createAppMenu()
 
 async function createWindow () {
   // Create the browser window.
@@ -58,16 +61,20 @@ async function createWindow () {
   })
   //移动默认位置
   setPosition()
+
   console.log('创建窗口')
   if (process.env.WEBPACK_DEV_SERVER_URL) {
     // Load the url of the dev server if in development mode
     await win.loadURL(process.env.WEBPACK_DEV_SERVER_URL)
-    if (process.env.IS_TEST) win.webContents.openDevTools()
+    if (!process.env.IS_TEST) win.webContents.openDevTools()
   } else {
     createProtocol('app')
     // Load the index.html when not in development
     win.loadURL('app://./index.html')
-    autoUpdater.checkForUpdatesAndNotify()
+    // autoUpdater.checkForUpdatesAndNotify()
+    const dirPathO = path.join(__dirname).split('resources')
+    const relativePath = dirPathO[0]
+    checkVersion(relativePath)
   }
 
   //屏蔽windows原生右键菜单
@@ -111,14 +118,14 @@ app.on('activate', () => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.on('ready', async () => {
-  if (isDevelopment && !process.env.IS_TEST) {
-    // Install Vue Devtools
-    try {
-      await installExtension(VUEJS3_DEVTOOLS)
-    } catch (e) {
-      console.error('Vue Devtools failed to install:', e.toString())
-    }
-  }
+  // if (isDevelopment && !process.env.IS_TEST) {
+  //   // Install Vue Devtools
+  //   try {
+  //     await installExtension(VUEJS3_DEVTOOLS)
+  //   } catch (e) {
+  //     console.error('Vue Devtools failed to install:', e.toString())
+  //   }
+  // }
   // createWindow()
   winInit()
 })
@@ -149,6 +156,7 @@ if (isDevelopment) {
 
 
 function setPosition () {
+
   console.log('定位')
   const displays = screen.getAllDisplays()
   if (displays.length > 1) {
@@ -181,26 +189,30 @@ ipcMain.handle('hideWindow', event => {
 
 //监听文件更新
 function sendStatusToWindow (text) {
-  mainWindow.webContents.send('message', text)
+  win.webContents.send('message', text)
 }
-
 autoUpdater.on('checking-for-update', () => {
+  log.info('Checking for update...')
   sendStatusToWindow('Checking for update...')
 })
 
 autoUpdater.on('update-available', (info) => {
+  log.info('Update available.')
   sendStatusToWindow('Update available.')
 })
 
 autoUpdater.on('update-not-available', (info) => {
+  log.info('Update not available.')
   sendStatusToWindow('Update not available.')
 })
 
 autoUpdater.on('error', (err) => {
+  log.info('Error in auto-updater')
   sendStatusToWindow('Error in auto-updater. ' + err)
 })
 
 autoUpdater.on('download-progress', (progressObj) => {
+  log.info('Download speed')
   let log_message = "Download speed: " + progressObj.bytesPerSecond
   log_message = log_message + ' - Downloaded ' + progressObj.percent + '%'
   log_message = log_message + ' (' + progressObj.transferred + "/" + progressObj.total + ')'
@@ -208,5 +220,7 @@ autoUpdater.on('download-progress', (progressObj) => {
 })
 
 autoUpdater.on('update-downloaded', (info) => {
+  log.info('Update downloaded')
+  autoUpdater.quitAndInstall()
   sendStatusToWindow('Update downloaded')
 })

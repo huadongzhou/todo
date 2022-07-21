@@ -12,7 +12,7 @@ DB.init().then(() => {
 
   const app = createApp(App).use(router).use(store)
   // 屏蔽警告信息
-  app.config.warnHandler = () => null
+  // app.config.warnHandler = () => null
 
   app.mount('#app')
 

@@ -5,6 +5,8 @@ import DB from "@/db"
 import path from "path"
 import pkg from "../../package.json"
 
+import { autoUpdater } from 'electron-updater'
+
 const userPath = app.getPath("userData")
 
 //外置防止内存清理释放托盘
@@ -43,6 +45,20 @@ export function initTray (setPosition) {
       }
     },
     {
+      label: "版本V " + pkg.version,
+      type: "normal",
+    },
+    {
+      label: "检查更新",
+      type: "normal",
+      click () {
+        const log = require("electron-log")
+        log.transports.file.level = "debug"
+        autoUpdater.logger = log
+        autoUpdater.checkForUpdatesAndNotify()
+      }
+    },
+    {
       label: "退出",
       role: "quit"
     }
@@ -56,25 +72,6 @@ export function initTray (setPosition) {
   tray.on("click", (event, bounds, position) => {
     setPosition()
   })
-}
-export function createAppMenu () {
-  const template = [
-    // { role: "appMenu" }
-    ...(process.platform === "darwin"
-      ? [
-        {
-          label: app.name,
-          submenu: [
-            { role: "about", label: "关于" },
-            { type: "separator" },
-            { role: "quit", label: "退出" }
-          ]
-        }
-      ]
-      : [])
-  ]
-  const menu = Menu.buildFromTemplate(template)
-  Menu.setApplicationMenu(menu)
 }
 //设置开机自启动
 function setOpenAtLogin (openAtLogin) {
