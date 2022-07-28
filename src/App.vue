@@ -9,7 +9,21 @@
       </div>
       <div class="todo-tools">
         <transform-group name="fade" mode="out-in">
-          <i class="iconfont icon-eye-close" key="hide" @click="hideWindow"></i>
+          <i class="iconfont icon-date" key="date" @click="$router.push('/sketch')"></i>
+          <i v-if="sketch == '1'" class="iconfont icon-bianji" key="bianji" @click="goSketch"></i>
+          <i
+            v-if="sketch == '2'"
+            class="iconfont icon-create"
+            key="create"
+            @click="$store.dispatch('setSketch','2-')"
+          ></i>
+          <i
+            v-if="sketch == '3'"
+            class="iconfont icon-save"
+            key="save"
+            @click="$store.dispatch('setSketch','3-')"
+          ></i>
+          <i class="iconfont icon-eye-close" key="close" @click="hideWindow"></i>
           <i
             :class="['iconfont', ignoreMouse ? 'icon-lock' : 'icon-unlock']"
             key="lock"
@@ -31,13 +45,19 @@
 
 <script>
 import { ipcRenderer } from 'electron'
+import { mapState } from 'vuex'
 
 export default {
   data () {
     return {
       ignoreMouse: true,
-      autoDisplay: false
+      autoDisplay: false,
     }
+  },
+  computed: {
+    ...mapState([
+      'sketch'
+    ])
   },
   methods: {
     setIgnoreMouseEvents (ignore) {
@@ -52,6 +72,10 @@ export default {
     lockClick () {
       this.ignoreMouse = !this.ignoreMouse
       this.autoDisplay = false
+    },
+    goSketch () {
+      this.$router.push('/sketch')
+      this.$store.dispatch('setSketch', '2')
     }
   }
 }

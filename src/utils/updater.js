@@ -1,13 +1,13 @@
 
 const { app, dialog, Notification } = require('electron')
-
+import { autoUpdater } from 'electron-updater'
 const axios = require('axios')
 const path = require('path')
 const YMAL = require('yamljs')
 const fs = require('fs')
 
 import log from './log'
-const { checkDir, execShell, execExe } = require('./file')
+const { checkDir, execShell } = require('./file')
 
 let pgk = require('../../package.json')
 
@@ -26,7 +26,13 @@ export function checkVersion (rootDir) {
     let localVersion = app.getVersion().split('.')
     log('version', localVersion, onlineVersion)
     //非热更新事项 不处理
-    if (onlineVersion[0] > localVersion[0] || onlineVersion[1] > localVersion[1] || onlineVersion[2] == localVersion[2]) {
+    if (onlineVersion[0] > localVersion[0] || onlineVersion[1] > localVersion[1]) {
+      //大版本自动更新
+      const log = require("electron-log")
+      log.transports.file.level = "debug"
+      autoUpdater.logger = log
+      autoUpdater.checkForUpdatesAndNotify()
+    } else if (onlineVersion[2] == localVersion[2]) {
       return false
     } else {
       //热更新业务

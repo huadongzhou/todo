@@ -7,7 +7,7 @@ import path from "path"
 import fs from "fs-extra"
 
 
-const isDevelopment = process.env.mode != 'production'
+const isDevelopment = process.env.NODE_ENV != 'production'
 let db
 
 const DB = {

@@ -5,7 +5,7 @@ import DB from "@/db"
 import path from "path"
 import pkg from "../../package.json"
 
-import { autoUpdater } from 'electron-updater'
+import { checkVersion } from '../utils/updater'
 
 const userPath = app.getPath("userData")
 
@@ -52,10 +52,8 @@ export function initTray (setPosition) {
       label: "检查更新",
       type: "normal",
       click () {
-        const log = require("electron-log")
-        log.transports.file.level = "debug"
-        autoUpdater.logger = log
-        autoUpdater.checkForUpdatesAndNotify()
+        //客户端更新  热更新
+        checkVersion()
       }
     },
     {

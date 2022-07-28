@@ -17,7 +17,7 @@ const isDevelopment = process.env.NODE_ENV !== 'production'
 
 let win
 
-
+log.info('当前环境：', process.env.NODE_ENV)
 //判断实例是否被打开
 if (app.requestSingleInstanceLock()) {
   app.on("second-instance", (event, commandLine, workingDirectory) => {
@@ -43,7 +43,7 @@ async function createWindow () {
     type: "toolbar",
     frame: false,
     title: pkg.name,
-    resizable: false,
+    // resizable: false,
     minimizable: false,
     maximizable: false,
     skipTaskbar: true,
