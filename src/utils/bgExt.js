@@ -5,6 +5,7 @@ import DB from "@/db"
 import path from "path"
 import pkg from "../../package.json"
 
+import { menuCheckVersion } from '../background'
 import { checkVersion } from '../utils/updater'
 
 const userPath = app.getPath("userData")
@@ -45,6 +46,14 @@ export function initTray (setPosition) {
       }
     },
     {
+      label: "自动检查更新",
+      type: "checkbox",
+      click () {
+        //客户端更新  热更新
+        // menuCheckVersion()
+      }
+    },
+    {
       label: "版本V " + pkg.version,
       type: "normal",
     },
@@ -53,7 +62,7 @@ export function initTray (setPosition) {
       type: "normal",
       click () {
         //客户端更新  热更新
-        checkVersion()
+        menuCheckVersion()
       }
     },
     {

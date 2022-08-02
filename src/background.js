@@ -1,15 +1,16 @@
 'use strict'
 
 import path from 'path'
-import { app, protocol, BrowserWindow, screen, ipcMain, Notification } from 'electron'
+import { app, protocol, BrowserWindow, screen, ipcMain } from 'electron'
 import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 // import installExtension, { VUEJS3_DEVTOOLS } from 'electron-devtools-installer'
 import { autoUpdater } from 'electron-updater'
 
-const log = require("electron-log")
 
+
+import log from '@/utils/log'
 import { initExt, initTray } from '@/utils/bgExt.js'
-import { checkVersion } from '@/utils/updater.js'
+import { checkVersion, hotVersion, allVersion, reloadVersion } from '@/utils/updater.js'
 import pkg from "../package.json"
 
 // console.log('gitPath', process.env.GH_TOKEN)
@@ -17,7 +18,7 @@ const isDevelopment = process.env.NODE_ENV !== 'production'
 
 let win
 
-log.info('当前环境：', process.env.NODE_ENV)
+log('当前环境：', process.env.NODE_ENV)
 //判断实例是否被打开
 if (app.requestSingleInstanceLock()) {
   app.on("second-instance", (event, commandLine, workingDirectory) => {
@@ -53,6 +54,7 @@ async function createWindow () {
     alwaysOnTop: true,
     useContentSize: true,
     webPreferences: {
+      // webSecurity: false,
       // Use pluginOptions.nodeIntegration, leave this alone
       // See nklayman.github.io/vue-cli-plugin-electron-builder/guide/security.html#node-integration for more info
       nodeIntegration: process.env.ELECTRON_NODE_INTEGRATION,
@@ -62,7 +64,7 @@ async function createWindow () {
   //移动默认位置
   setPosition()
 
-  console.log('创建窗口')
+  log('创建窗口', process.env.WEBPACK_DEV_SERVER_URL)
   if (process.env.WEBPACK_DEV_SERVER_URL) {
     // Load the url of the dev server if in development mode
     await win.loadURL(process.env.WEBPACK_DEV_SERVER_URL)
@@ -72,11 +74,10 @@ async function createWindow () {
     // Load the index.html when not in development
     win.loadURL('app://./index.html')
     // autoUpdater.checkForUpdatesAndNotify()
-    const dirPathO = path.join(__dirname).split('resources')
-    const relativePath = dirPathO[0]
-    checkVersion(relativePath)
+    // checkVersion(relativePath)
   }
 
+  // createChildWindow(win, 'update')
   //屏蔽windows原生右键菜单
   if (process.platform === "win32") {
     //int WM_INITMENU = 0x116;
@@ -156,15 +157,15 @@ if (isDevelopment) {
 
 
 function setPosition () {
-
-  console.log('定位')
   const displays = screen.getAllDisplays()
+
+  // log('定位', displays)
   if (displays.length > 1) {
     const standard = displays[0]
     const displayWidth = displays.reduce((t, m, i) => {
       return t += (i == 0 ? m.bounds.width : m.bounds.width / standard.scaleFactor)
     }, 0)
-    // console.log('screen', displays, displayWidth)
+    // log('screen', displays, displayWidth)
     win.setPosition(displayWidth - 350, 120)
   } else {
     const size = screen.getPrimaryDisplay().workAreaSize
@@ -179,40 +180,68 @@ function showWindow () {
 
 //监听进程事件
 ipcMain.handle('setIgnoreMouseEvents', (event, ignore) => {
-  console.log('处理鼠标事件')
+  log('处理鼠标事件')
   if (ignore) win.setIgnoreMouseEvents(true, { forward: true })
   else win.setIgnoreMouseEvents(false)
 })
 ipcMain.handle('hideWindow', event => {
   win.hide()
 })
+//检查版本
+ipcMain.handle('checkVersion', async event => {
+  const version = await checkVersion()
+  log('版本查询', version)
+  return version
+})
+//热更新
+ipcMain.handle('hotVersion', async (event, version) => {
+  const result = await hotVersion(version)
+  log('热更新状态', result)
+  return result
+})
+//全量更新
+ipcMain.handle('allVersion', event => {
+  allVersion()
+})
+//重启应用
+ipcMain.handle('reloadVersion', event => {
+  reloadVersion()
+})
 
+
+//向渲染器发送事件
+//检查更新
+export function menuCheckVersion () {
+  win.webContents.send('checkVersion')
+}
 //监听文件更新
 function sendStatusToWindow (text) {
   win.webContents.send('message', text)
 }
+
+
 autoUpdater.on('checking-for-update', () => {
-  log.info('Checking for update...')
+  log('Checking for update...')
   sendStatusToWindow('Checking for update...')
 })
 
 autoUpdater.on('update-available', (info) => {
-  log.info('Update available.')
+  log('Update available.')
   sendStatusToWindow('Update available.')
 })
 
 autoUpdater.on('update-not-available', (info) => {
-  log.info('Update not available.')
+  log('Update not available.')
   sendStatusToWindow('Update not available.')
 })
 
 autoUpdater.on('error', (err) => {
-  log.info('Error in auto-updater')
+  log('Error in auto-updater')
   sendStatusToWindow('Error in auto-updater. ' + err)
 })
 
 autoUpdater.on('download-progress', (progressObj) => {
-  log.info('Download speed')
+  log('Download speed')
   let log_message = "Download speed: " + progressObj.bytesPerSecond
   log_message = log_message + ' - Downloaded ' + progressObj.percent + '%'
   log_message = log_message + ' (' + progressObj.transferred + "/" + progressObj.total + ')'
@@ -220,7 +249,7 @@ autoUpdater.on('download-progress', (progressObj) => {
 })
 
 autoUpdater.on('update-downloaded', (info) => {
-  log.info('Update downloaded')
+  log('Update downloaded')
   autoUpdater.quitAndInstall()
   sendStatusToWindow('Update downloaded')
 })

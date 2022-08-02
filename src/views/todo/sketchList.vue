@@ -41,7 +41,7 @@
 import DB from '@/db'
 import { defineComponent } from "vue"
 import { mapState } from 'vuex'
-import vuedraggable from '../../node_modules/vuedraggable/src/vuedraggable'
+import vuedraggable from '../../../node_modules/vuedraggable/src/vuedraggable'
 
 
 import { getDateTime, deepClone } from '@/utils'
@@ -207,6 +207,7 @@ export default defineComponent({
   box-sizing: border-box;
   padding: 0 15px 30px 15px;
   position: relative;
+  color: #fff;
   .sketch-list {
     .sketch-li {
       margin: 20px 0;
@@ -262,11 +263,12 @@ export default defineComponent({
     }
     .sketch-text {
       width: 100%;
-      height: calc(100% - 35px);
+      height: calc(100% - 38px);
       background: transparent;
       border: none;
       outline: none;
       resize: none;
+      overflow-y: hidden;
     }
   }
 }

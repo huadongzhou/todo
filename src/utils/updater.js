@@ -1,5 +1,5 @@
 
-const { app, dialog, Notification } = require('electron')
+import { app, dialog, Notification } from 'electron'
 import { autoUpdater } from 'electron-updater'
 const axios = require('axios')
 const path = require('path')
@@ -11,10 +11,19 @@ const { checkDir, execShell } = require('./file')
 
 let pgk = require('../../package.json')
 
-//检查版本状况
-export function checkVersion (rootDir) {
+const isDevelopment = process.env.NODE_ENV != 'production'
+//资源位置 and 下载位置
+const dirPathO = path.join(__dirname).split('resources')
+let relativePath = ''
+if (isDevelopment) {
+  relativePath = app.getPath('userData')
+} else {
+  relativePath = dirPathO[0]
+}
+let downDir = path.join(relativePath, 'Download')
 
-  let downDir = path.join(rootDir, 'Download')
+//检查版本状况
+export function oldCheckVersion () {
   axios({
     url: 'http://139.159.242.135/latest.yml',
     method: 'GET'
@@ -22,6 +31,7 @@ export function checkVersion (rootDir) {
     //拿到文件版本号  第一位全新版本  第二位进程调整 第三位业务调整
     let data = YMAL.parse(result.data)
     // log('读取结果', data)
+
     let onlineVersion = data.version.split('.')
     let localVersion = app.getVersion().split('.')
     log('version', localVersion, onlineVersion)
@@ -62,8 +72,12 @@ export function checkVersion (rootDir) {
               //修改本地版本
               changeVersion(data.version)
               // //复制文件脚本
-              log('复制脚本位置：', path.join(rootDir, 'copy.bat'))
-              await execShell(path.join(rootDir, 'copy.bat'))
+              log('复制脚本位置：', path.join(relativePath, 'copy.bat'))
+              if (isDevelopment) {
+                await execShell(path.join(relativePath, 'copy-dev.bat'))
+              } else {
+                await execShell(path.join(relativePath, 'copy.bat'))
+              }
               if (Notification.isSupported()) {
                 let notification = new Notification({
                   title: '提示',
@@ -81,6 +95,70 @@ export function checkVersion (rootDir) {
     }
   })
 }
+//版本检查
+export async function checkVersion () {
+  const result = await axios({
+    url: 'http://139.159.242.135/latest.yml',
+    method: 'GET'
+  })
+  //拿到文件版本号  第一位全新版本  第二位进程调整 第三位业务调整
+  let data = YMAL.parse(result.data)
+  // log('读取结果', data)
+  let res = {
+    online: data.version.split('.'),
+    local: app.getVersion().split('.')
+  }
+  return res
+}
+//热更新
+export async function hotVersion (version) {
+  try {
+    //检查文件夹
+    await checkDir(downDir)
+    if (Notification.isSupported()) {
+      let notification = new Notification({
+        title: '提示',
+        body: '当前应用处于更新中，请不要退出当前应用！',
+        silent: true,
+      })
+      notification.show()
+    }
+    //下载文件内容
+    await downHotVersion(version, downDir)
+    //修改本地版本
+    await changeVersion(version)
+    return true
+  } catch (err) {
+    log('版本下载错误', err)
+    return false
+  }
+}
+//热更新
+export function allVersion () {
+  //大版本自动更新
+  const log = require("electron-log")
+  log.transports.file.level = "debug"
+  autoUpdater.logger = log
+  autoUpdater.checkForUpdatesAndNotify()
+}
+//重启应用
+export async function reloadVersion () {
+  // //复制文件脚本
+  log('复制脚本位置：', path.join(relativePath, 'copy.bat'))
+  if (isDevelopment) {
+    await execShell(path.join(relativePath, 'copy-dev.bat'))
+  } else {
+    await execShell(path.join(relativePath, 'copy.bat'))
+  }
+  if (Notification.isSupported()) {
+    let notification = new Notification({
+      title: '提示',
+      body: '当前应用更新完成,重启中...',
+      silent: true,
+    })
+    notification.show()
+  }
+}
 //改变本地版本信息
 function changeVersion (name) {
   return new Promise((resolve, reject) => {
@@ -88,7 +166,6 @@ function changeVersion (name) {
     log('version change success!   ' + pgk.version)
     resolve()
   })
-
 }
 // log('version !   ' + pgk.version)
 //下载新内容
@@ -102,11 +179,10 @@ function downHotVersion (version, downloadPath) {
       timeout: 10 * 60 * 1000,
       maxContentLength: Infinity,
       responseType: 'stream',
-    }).then(res => {
-      // console.log(res.data)
-      //创建写入流   asar文件不能直接生成 这里采用未分配格式
+    }).then((res) => {
+      // 创建写入流   asar文件不能直接生成 这里采用未分配格式
       let appFile = fs.createWriteStream(path.join(downloadPath, 'app'))
-      //捅进去
+      // 捅进去
       res.data.pipe(appFile)
       //结束下载
 

@@ -90,6 +90,7 @@ export default defineComponent({
   height: 100%;
   box-sizing: border-box;
   padding: 0 15px 30px 15px;
+  color: #fff;
   .done-list {
     .group {
       position: sticky;

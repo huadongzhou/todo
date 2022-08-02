@@ -37,7 +37,7 @@
 <script>
 import DB from '@/db'
 import { defineComponent } from "vue"
-import vuedraggable from '../../node_modules/vuedraggable/src/vuedraggable'
+import vuedraggable from '../../../node_modules/vuedraggable/src/vuedraggable'
 
 import { getDateTime, deepClone } from '@/utils'
 import CursorSpecialEffects from "@/utils/fireworks"
@@ -88,14 +88,16 @@ export default defineComponent({
         let oldData = this.todoList.splice(oldIndex, 1)[0]
         //判断前后
         let index = newIndex - 1
-        // console.log('index', index)
-        if (index - 1 <= 0) {
+        console.log('index', oldIndex, newIndex, index)
+        if (index < 0) {
           this.todoList.unshift(oldData)
         } else {
-          this.todoList.splice(index, 0, oldData)
+          this.todoList.splice(newIndex, 0, oldData)
         }
         //更新至数据库
-        DB.set('todoList', this.todoList)
+        let data = DB.set('todoList', this.todoList)
+        //刷新数据 
+        this.todoList = data.todoList
       }
       console.log(e)
     },
@@ -199,9 +201,14 @@ export default defineComponent({
 <style lang="scss" scoped>
 .todo {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
   box-sizing: border-box;
   padding: 0 15px 30px 15px;
+  color: #fff;
+  // overflow-y: auto;
+  // &:hover::-webkit-scrollbar-thumb {
+  //   display: block;
+  // }
   .todo-list {
     .todo-li {
       height: 28px;

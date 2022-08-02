@@ -12,10 +12,15 @@ body {
 * {
   padding: 0;
   margin: 0;
-  color: #ffffff;
+  // color: #ffffff;
 }
 *::selection {
   background: rgba($color: #ffffff, $alpha: 0.3);
+}
+
+input,
+textarea {
+  color: #fff;
 }
 
 .scrollbar-x::-webkit-scrollbar {
