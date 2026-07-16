@@ -4,6 +4,15 @@ bin-release/
 [Oo]bj/
 [Bb]in/
 
+# JavaScript and Rust build artifacts
+node_modules/
+dist/
+target/
+.codebase-memory/
+.env
+.env.*
+!.env.example
+
 # Other files and folders
 .settings/
 

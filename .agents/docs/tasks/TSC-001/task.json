@@ -1,0 +1,68 @@
+{
+  "task_id": "TSC-001",
+  "title": "合并前端 TypeScript 项目配置",
+  "status": "done",
+  "flow": "light",
+  "priority": "low",
+  "owner_role": "orchestrator",
+  "acceptance_criteria": [
+    "根 tsconfig.json 同时覆盖 Vue 源码与 Vite/UnoCSS 配置文件。",
+    "tsconfig.app.json 与 tsconfig.node.json 被删除。",
+    "pnpm run check 与 pnpm run build 通过。"
+  ],
+  "skipped_roles": [
+    {
+      "role": "ux-ui",
+      "reason": "仅合并 TypeScript 配置，不影响 UI 或交互。",
+      "impact": "无用户可见影响。",
+      "evidence": ["tsconfig.json"]
+    },
+    {
+      "role": "release",
+      "reason": "不涉及发布。",
+      "impact": "无运行时配置变更。",
+      "evidence": ["implementation.md"]
+    }
+  ],
+  "artifacts": {
+    "implementation": "implementation.md",
+    "qa_report": "qa-report.md",
+    "review": "review.md"
+  },
+  "history": [
+    {
+      "date": "2026-07-17",
+      "from_status": null,
+      "to_status": "implementation",
+      "actor_role": "developer",
+      "summary": "用户要求合并 TypeScript 项目配置。",
+      "evidence": ["用户需求", "implementation.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "implementation",
+      "to_status": "qa",
+      "actor_role": "qa",
+      "summary": "类型检查与生产构建通过。",
+      "evidence": ["qa-report.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "qa",
+      "to_status": "review",
+      "actor_role": "reviewer",
+      "summary": "通过配置精简审查。",
+      "evidence": ["review.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "review",
+      "to_status": "done",
+      "actor_role": "orchestrator",
+      "summary": "满足轻量流程完成条件。",
+      "evidence": ["qa-report.md", "review.md"]
+    }
+  ],
+  "blockers": [],
+  "human_approvals": []
+}

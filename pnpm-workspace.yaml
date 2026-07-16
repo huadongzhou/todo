@@ -1,0 +1,5 @@
+allowBuilds:
+  vue-demi: true
+minimumReleaseAgeExclude:
+  - vue
+  - "@vue/*"

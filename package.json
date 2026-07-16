@@ -1,0 +1,44 @@
+{
+  "name": "cross-platform-todo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "pnpm run check && vp build",
+    "check": "vp check",
+    "types:generate": "cargo test --manifest-path src-tauri/Cargo.toml export_type_bindings",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:android": "tauri android dev",
+    "tauri:ios": "tauri ios dev"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-log": "^2.9.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-vue-next": "^0.563.0",
+    "pinia": "^4.0.2",
+    "radix-vue": "^1.9.17",
+    "tailwind-merge": "^3.4.0",
+    "vue": "^3.5.40"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-vue": "^6.0.3",
+    "@vue/tsconfig": "^0.8.1",
+    "shadcn-vue": "^2.8.0",
+    "typescript": "~5.9.3",
+    "unocss": "^66.7.5",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
+    "vite-plus": "0.2.4",
+    "vue-tsc": "^3.1.5"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.4"
+  },
+  "packageManager": "pnpm@11.5.1"
+}

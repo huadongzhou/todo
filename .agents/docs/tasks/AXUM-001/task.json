@@ -1,0 +1,78 @@
+{
+  "task_id": "AXUM-001",
+  "title": "将服务层迁移为 Axum，并收敛 Rust 跨端契约",
+  "status": "blocked",
+  "flow": "standard",
+  "priority": "high",
+  "owner_role": "developer",
+  "acceptance_criteria": [
+    "服务端使用 Axum 提供 GET /health 与 POST /v1/sync。",
+    "服务端和 Tauri 依赖同一 todo-contracts Rust crate，不再各自定义 Todo 或同步 DTO。",
+    "桌面端的 Todo 与同步类型仅引用 Rust 导出的 TypeScript bindings。",
+    "重复同步操作不会增加游标，非法 upsert/delete 组合返回 HTTP 400。",
+    "移除 Bun/Elysia 运行入口及其 npm 依赖。"
+  ],
+  "skipped_roles": [
+    {
+      "role": "ux-ui",
+      "reason": "仅迁移服务端与类型契约，没有用户界面、交互或可访问性变更。",
+      "impact": "不影响现有桌面界面。",
+      "evidence": ["crates/server", "crates/contracts"]
+    },
+    {
+      "role": "release",
+      "reason": "本任务不部署生产服务。",
+      "impact": "运行与部署参数记录在 .env.example。",
+      "evidence": ["crates/server/.env.example"]
+    }
+  ],
+  "artifacts": {
+    "prd": "prd.md",
+    "design": "design.md",
+    "architecture": "architecture.md",
+    "implementation": "implementation.md",
+    "qa_report": "qa-report.md",
+    "review": "review.md",
+    "release": "release.md"
+  },
+  "history": [
+    {
+      "date": "2026-07-16",
+      "from_status": null,
+      "to_status": "intake",
+      "actor_role": "product",
+      "summary": "用户选择采用 Axum，并要求以 Rust 收敛跨端类型。",
+      "evidence": ["用户需求"]
+    },
+    {
+      "date": "2026-07-16",
+      "from_status": "intake",
+      "to_status": "implementation",
+      "actor_role": "architect",
+      "summary": "确定 Cargo workspace 与 Rust 单一契约源方案，进入实现。",
+      "evidence": ["architecture.md"]
+    },
+    {
+      "date": "2026-07-16",
+      "from_status": "implementation",
+      "to_status": "blocked",
+      "actor_role": "qa",
+      "summary": "Cargo registry 无法连接，完整 Rust 编译、测试和 bindings 导出无法验证。",
+      "evidence": ["qa-report.md"]
+    }
+  ],
+  "blockers": [
+    {
+      "date": "2026-07-16",
+      "condition": "Cargo 使用的 USTC registry 无法连接，无法解析 serde 并执行 Rust 编译或测试。",
+      "required_resolution": "恢复 Cargo registry 网络访问后生成根 Cargo.lock，并执行 workspace check、test 与类型导出。"
+    }
+  ],
+  "human_approvals": [
+    {
+      "date": "2026-07-16",
+      "scope": "将 Bun/Elysia 服务层改为 Axum",
+      "evidence": "用户明确选择：采用 Axum"
+    }
+  ]
+}
