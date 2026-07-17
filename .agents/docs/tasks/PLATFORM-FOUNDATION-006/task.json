@@ -1,0 +1,90 @@
+{
+  "task_id": "PLATFORM-FOUNDATION-006",
+  "title": "平台基础层：同步传输与设备通信",
+  "status": "qa",
+  "flow": "standard",
+  "priority": "high",
+  "owner_role": "qa",
+  "acceptance_criteria": [
+    "客户端通过 HTTP 与 Axum 服务端的 POST /v1/sync 同步待办变更，协议复用既有 todo-contracts 契约。",
+    "本地待办变更（新增 / 完成 / 删除 / 编辑）被记录为同步操作，启动时与变更后自动同步。",
+    "服务端返回的远端变更正确合并到本地 store（服务端优先），不产生循环记录。",
+    "设备身份（device_id）生成并持久化，在设置页可见。",
+    "浏览器 / 移动端无服务端时安全降级，不阻塞启动。",
+    "设置页可配置服务端地址、手动触发同步、显示同步状态。"
+  ],
+  "skipped_roles": [],
+  "artifacts": {
+    "prd": "prd.md",
+    "design": "design.md",
+    "architecture": "architecture.md",
+    "implementation": "implementation.md",
+    "qa_report": "qa-report.md",
+    "review": "review.md",
+    "release": "release.md"
+  },
+  "history": [
+    {
+      "date": "2026-07-17",
+      "from_status": null,
+      "to_status": "intake",
+      "actor_role": "product",
+      "summary": "用户确认进入第六里程碑：同步传输与设备通信。服务端已就绪（Axum + 内存 SyncService），缺口在客户端传输层与同步引擎。",
+      "evidence": ["用户消息：推进", "crates/server 已编译", "contracts 已导出 TS bindings"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "intake",
+      "to_status": "product_ready",
+      "actor_role": "product",
+      "summary": "完成同步传输与设备通信需求。",
+      "evidence": ["prd.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "product_ready",
+      "to_status": "design_ready",
+      "actor_role": "ux-ui",
+      "summary": "完成操作式同步模型、模块边界、合并规则与设置 UI 规格。",
+      "evidence": ["design.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "design_ready",
+      "to_status": "architecture_ready",
+      "actor_role": "architect",
+      "summary": "确认客户端传输层 + 引擎架构，复用既有服务端与契约。",
+      "evidence": ["architecture.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "architecture_ready",
+      "to_status": "implementation",
+      "actor_role": "developer",
+      "summary": "开始实现。",
+      "evidence": ["handoff.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "implementation",
+      "to_status": "qa",
+      "actor_role": "developer",
+      "summary": "实现客户端同步传输层与引擎；完成静态、构建与协议测试验证。",
+      "evidence": [
+        "implementation.md",
+        "cargo check --workspace",
+        "cargo test -p todo-contracts -p todo-domain -p todo-server",
+        "pnpm run check",
+        "pnpm run build"
+      ]
+    }
+  ],
+  "blockers": [],
+  "human_approvals": [
+    {
+      "date": "2026-07-17",
+      "scope": "第六里程碑范围",
+      "evidence": ["用户消息：推进"]
+    }
+  ]
+}

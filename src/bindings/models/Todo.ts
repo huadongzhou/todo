@@ -7,4 +7,6 @@ export type Todo = {
   status: TodoStatus;
   createdAt: string;
   completedAt: string | null;
+  dueDate?: string | null;
+  reminderAt?: string | null;
 };

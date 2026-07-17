@@ -13,6 +13,12 @@ pub struct Todo {
     pub status: TodoStatus,
     pub created_at: String,
     pub completed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub due_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reminder_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS, Type)]

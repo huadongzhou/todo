@@ -1,0 +1,83 @@
+{
+  "task_id": "PLATFORM-FOUNDATION-001",
+  "title": "平台基础层：设置、主题与诊断日志",
+  "status": "qa",
+  "flow": "standard",
+  "priority": "high",
+  "owner_role": "qa",
+  "acceptance_criteria": [
+    "应用可在桌面端保存并恢复 light、dark、system 三种主题偏好。",
+    "主题变化同时更新 Web 视图与当前 Tauri 原生窗口；浏览器开发模式可安全降级。",
+    "设置入口具备明确标签、键盘可操作控件和移动端可读布局。",
+    "前端诊断日志在控制台可见，并在 Tauri 环境转发到官方日志插件。",
+    "所有新增 Tauri 插件权限仅授予默认主窗口所需的最小范围。"
+  ],
+  "skipped_roles": [],
+  "artifacts": {
+    "prd": "prd.md",
+    "design": "design.md",
+    "architecture": "architecture.md",
+    "implementation": "implementation.md",
+    "qa_report": "qa-report.md",
+    "review": "review.md",
+    "release": "release.md"
+  },
+  "history": [
+    {
+      "date": "2026-07-17",
+      "from_status": null,
+      "to_status": "intake",
+      "actor_role": "product",
+      "summary": "根据用户确认，建立平台基础层第一里程碑。",
+      "evidence": ["用户消息：推进"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "intake",
+      "to_status": "product_ready",
+      "actor_role": "product",
+      "summary": "完成可验证的范围和验收标准。",
+      "evidence": ["prd.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "product_ready",
+      "to_status": "design_ready",
+      "actor_role": "ux-ui",
+      "summary": "完成设置入口、主题控件和响应式规格。",
+      "evidence": ["design.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "design_ready",
+      "to_status": "architecture_ready",
+      "actor_role": "architect",
+      "summary": "确认 Pinia、官方 Store、官方 Log 与 Tauri Core 的边界。",
+      "evidence": ["architecture.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "architecture_ready",
+      "to_status": "implementation",
+      "actor_role": "developer",
+      "summary": "开始实现。",
+      "evidence": ["handoff.md"]
+    },
+    {
+      "date": "2026-07-17",
+      "from_status": "implementation",
+      "to_status": "qa",
+      "actor_role": "developer",
+      "summary": "实现官方 Store、Log、主题平台层和设置面板；已完成静态与构建验证。",
+      "evidence": ["implementation.md", "pnpm run check", "pnpm run build", "cargo check --manifest-path src-tauri/Cargo.toml"]
+    }
+  ],
+  "blockers": [],
+  "human_approvals": [
+    {
+      "date": "2026-07-17",
+      "scope": "第一里程碑范围",
+      "evidence": "用户消息：推进"
+    }
+  ]
+}
