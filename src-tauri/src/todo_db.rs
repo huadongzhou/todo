@@ -2,6 +2,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, Row};
+use serde::Serialize;
+use specta::Type;
 use todo_contracts::{Todo, TodoStatus};
 
 /// Client-side SQLite storage for todos.
@@ -14,8 +16,22 @@ pub struct TodoDb {
     connection: Option<Mutex<Connection>>,
 }
 
-/// Schema revision stored in `PRAGMA user_version`; bump it when the table
-/// layout changes so a future migration step can tell versions apart.
+/// Revision of the `todos` table layout, stamped into `PRAGMA user_version`
+/// when the database file is created.
+///
+/// This is the **schema version and nothing else** — not a counter of applied
+/// migration steps. Two rules follow from that and are the whole contract for
+/// later work:
+///
+/// * the value changes only when the column layout changes, and the build that
+///   raises it must also carry every lower revision up to the new one (an
+///   `ALTER TABLE` step keyed on the stored value);
+/// * moving data around — draining the writes the view layer parked outside
+///   SQLite, for instance — never touches it, because the layout is the same
+///   before and after.
+///
+/// So `stored == SCHEMA_VERSION` means "this file matches the layout this build
+/// compiles against", which is the only question the code ever asks.
 const SCHEMA_VERSION: i64 = 1;
 
 const CREATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS todos (
@@ -42,6 +58,27 @@ const UPSERT_TODO: &str =
         completed_at = excluded.completed_at,
         due_date = excluded.due_date,
         reminder_at = excluded.reminder_at";
+
+/// Outcome of replaying the writes the view layer parked outside SQLite.
+///
+/// Entries are applied one by one, so a row SQLite refuses cannot stop the
+/// rest: accepted ids come back in `applied` and the caller drops them from its
+/// journal, refused ones come back in `rejected` with the reason and the caller
+/// keeps them — still shown to the user, retried on the next start.
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingWriteReport {
+    pub applied: Vec<String>,
+    pub rejected: Vec<RejectedWrite>,
+}
+
+/// A single entry SQLite would not take, with the reason for diagnostics.
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectedWrite {
+    pub id: String,
+    pub error: String,
+}
 
 #[derive(Debug)]
 pub enum TodoDbError {
@@ -119,10 +156,14 @@ fn initialise(connection: &Connection) -> Result<(), rusqlite::Error> {
     let stored: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if stored == 0 {
         connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    } else if stored != SCHEMA_VERSION {
+    } else if stored > SCHEMA_VERSION {
+        // Only a newer build can have written a higher revision, and its layout
+        // is unknown here. Matching the threshold to `SCHEMA_VERSION` is what
+        // keeps the warning honest: every value this build understands is
+        // exactly `SCHEMA_VERSION`.
         log::warn!(
-            "Todo database schema version {stored} differs from the expected {SCHEMA_VERSION}; \
-             leaving it untouched for the migration step to handle"
+            "Todo database schema revision {stored} is newer than the {SCHEMA_VERSION} this build \
+             knows; leaving it untouched"
         );
     }
     Ok(())
@@ -192,6 +233,57 @@ impl TodoDb {
             )?;
             Ok(())
         })
+    }
+
+    /// Applies the writes the view layer could not get into SQLite earlier: the
+    /// todos it had to park in its fallback store, plus the ids whose deletion
+    /// it could not perform.
+    ///
+    /// A parked write only exists while SQLite holds nothing newer for that id
+    /// — the view layer drops it the moment a native write succeeds — so an
+    /// upsert here is always the fresher copy and must overwrite, and a parked
+    /// deletion is a tombstone that must delete. Skipping ids the database
+    /// already knows would silently throw the newer copy away instead.
+    ///
+    /// Each entry is applied on its own, which is the unit the caller settles
+    /// up in: `Err` means the database as a whole is unusable and nothing was
+    /// applied, while a single unusable row is a `rejected` entry that leaves
+    /// the rest of the batch untouched. Replaying is idempotent (an upsert of
+    /// the same row, a delete of an absent row), so a crash between commit and
+    /// the caller's bookkeeping costs nothing but one repeated write.
+    pub fn replay_pending(
+        &self,
+        upserts: &[Todo],
+        deletions: &[String],
+    ) -> Result<PendingWriteReport, TodoDbError> {
+        let mut report = PendingWriteReport {
+            applied: Vec::new(),
+            rejected: Vec::new(),
+        };
+
+        for todo in upserts {
+            match self.save(todo) {
+                Ok(()) => report.applied.push(todo.id.clone()),
+                Err(TodoDbError::Sqlite(error)) => report.rejected.push(RejectedWrite {
+                    id: todo.id.clone(),
+                    error,
+                }),
+                Err(fatal) => return Err(fatal),
+            }
+        }
+
+        for id in deletions {
+            match self.delete(id) {
+                Ok(()) => report.applied.push(id.clone()),
+                Err(TodoDbError::Sqlite(error)) => report.rejected.push(RejectedWrite {
+                    id: id.clone(),
+                    error,
+                }),
+                Err(fatal) => return Err(fatal),
+            }
+        }
+
+        Ok(report)
     }
 
     /// Removes the todo; deleting an unknown id succeeds.
@@ -279,6 +371,10 @@ mod tests {
             Err(TodoDbError::Unavailable)
         ));
         assert!(matches!(db.delete("a"), Err(TodoDbError::Unavailable)));
+        assert!(matches!(
+            db.replay_pending(&[todo("a", "2026-07-01T00:00:00Z")], &["b".to_owned()]),
+            Err(TodoDbError::Unavailable)
+        ));
     }
 
     fn user_version(connection: &Connection) -> i64 {
@@ -309,6 +405,115 @@ mod tests {
         initialise(&connection).expect("re-initialise schema");
 
         assert_eq!(user_version(&connection), SCHEMA_VERSION + 1);
+    }
+
+    fn version_of(db: &TodoDb) -> i64 {
+        db.with_connection(|connection| {
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))
+        })
+        .expect("read user_version")
+    }
+
+    #[test]
+    fn replaying_pending_writes_stores_them_without_touching_the_schema_version() {
+        let db = memory_db();
+        assert_eq!(version_of(&db), SCHEMA_VERSION);
+
+        let report = db
+            .replay_pending(
+                &[
+                    todo("a", "2026-07-01T00:00:00Z"),
+                    todo("b", "2026-07-02T00:00:00Z"),
+                ],
+                &[],
+            )
+            .expect("replay pending writes");
+
+        assert_eq!(report.applied, vec!["a".to_owned(), "b".to_owned()]);
+        assert!(report.rejected.is_empty());
+        assert_eq!(db.list().expect("list todos").len(), 2);
+        // Moving data is not a layout change, so the schema revision stands.
+        assert_eq!(version_of(&db), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn a_parked_write_overwrites_the_row_it_was_never_able_to_update() {
+        let db = memory_db();
+        let mut stored = todo("a", "2026-07-01T00:00:00Z");
+        stored.title = "the row SQLite already had".to_owned();
+        db.save(&stored).expect("save");
+
+        // The view layer edited the same todo while SQLite was refusing writes,
+        // so its parked copy is the newer one — the case a "skip known ids"
+        // import used to drop on the floor.
+        let mut parked = stored.clone();
+        parked.title = "written while the database was refusing".to_owned();
+        parked.status = TodoStatus::Completed;
+        parked.completed_at = Some("2026-07-05T00:00:00Z".to_owned());
+
+        let report = db.replay_pending(&[parked], &[]).expect("replay");
+
+        assert_eq!(report.applied, vec!["a".to_owned()]);
+        let rows = db.list().expect("list todos");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "written while the database was refusing");
+        assert!(matches!(rows[0].status, TodoStatus::Completed));
+    }
+
+    #[test]
+    fn a_parked_deletion_removes_the_row_and_tolerates_unknown_ids() {
+        let db = memory_db();
+        db.save(&todo("a", "2026-07-01T00:00:00Z")).expect("save");
+
+        let report = db
+            .replay_pending(&[], &["a".to_owned(), "never-stored".to_owned()])
+            .expect("replay");
+
+        assert_eq!(
+            report.applied,
+            vec!["a".to_owned(), "never-stored".to_owned()]
+        );
+        assert!(db.list().expect("list todos").is_empty());
+    }
+
+    #[test]
+    fn one_rejected_entry_does_not_hold_up_the_rest_of_the_journal() {
+        let connection = Connection::open_in_memory().expect("open in-memory database");
+        initialise(&connection).expect("initialise schema");
+        // Stands in for any single row SQLite refuses; without per-entry
+        // application it would block every other pending write forever.
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_b BEFORE INSERT ON todos
+                 WHEN NEW.id = 'b' BEGIN SELECT RAISE(ABORT, 'rejected'); END",
+            )
+            .expect("create trigger");
+        let db = TodoDb {
+            connection: Some(Mutex::new(connection)),
+        };
+
+        let report = db
+            .replay_pending(
+                &[
+                    todo("a", "2026-07-01T00:00:00Z"),
+                    todo("b", "2026-07-02T00:00:00Z"),
+                    todo("c", "2026-07-03T00:00:00Z"),
+                ],
+                &[],
+            )
+            .expect("replay");
+
+        assert_eq!(report.applied, vec!["a".to_owned(), "c".to_owned()]);
+        assert_eq!(report.rejected.len(), 1);
+        assert_eq!(report.rejected[0].id, "b");
+        assert!(report.rejected[0].error.contains("rejected"));
+        let ids: Vec<String> = db
+            .list()
+            .expect("list todos")
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+        assert_eq!(ids, vec!["c".to_owned(), "a".to_owned()]);
     }
 
     #[test]

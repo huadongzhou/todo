@@ -5,12 +5,19 @@ import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { buildDeleteOperation, buildUpsertOperation, recordOperation } from "@/lib/sync-engine";
+import type { PendingWriteFlush, WriteOutcome } from "@/lib/todo-repository";
 import { todoRepository } from "@/lib/todo-repository";
 
 export interface NewTodoInput {
   readonly title: string;
   readonly dueDate?: string | null;
   readonly reminderAt?: string | null;
+}
+
+/** A durability problem the user should know about, and how loud it is. */
+export interface StorageAlert {
+  readonly tone: "warn" | "error";
+  readonly message: string;
 }
 
 const newId = () => crypto.randomUUID();
@@ -21,9 +28,60 @@ export const useTodoStore = defineStore("todos", () => {
   const completedItems = computed(() => items.value.filter((todo) => todo.status === "completed"));
   const repository = todoRepository();
 
+  // Where the writes this session issued actually landed. The repository can
+  // only report one write at a time; keeping the ids here is what turns those
+  // reports into a state the UI can show and the user can act on.
+  const degradedIds = ref<ReadonlySet<string>>(new Set());
+  const failedIds = ref<ReadonlySet<string>>(new Set());
+  /** Whether the startup replay left writes the database still owes. */
+  const startupBacklog = ref(false);
+
+  const storageAlert = computed<StorageAlert | null>(() => {
+    if (failedIds.value.size > 0) {
+      return { tone: "error", message: "有改动没能保存到本机，请检查磁盘空间后重试。" };
+    }
+    if (degradedIds.value.size > 0 || startupBacklog.value) {
+      return { tone: "warn", message: "有改动暂存在本地缓存，尚未写入数据库，重启后会自动补写。" };
+    }
+    return null;
+  });
+
+  function withoutId(ids: ReadonlySet<string>, id: string): Set<string> {
+    const next = new Set(ids);
+    next.delete(id);
+    return next;
+  }
+
+  /** Consumes one write outcome: the tri-state decides both state and log level. */
+  function noteWriteOutcome(id: string, outcome: WriteOutcome): void {
+    const degraded = withoutId(degradedIds.value, id);
+    const failed = withoutId(failedIds.value, id);
+    if (outcome === "degraded") degraded.add(id);
+    if (outcome === "failed") failed.add(id);
+    degradedIds.value = degraded;
+    failedIds.value = failed;
+
+    if (outcome === "stored") return;
+    writeDiagnostic(outcome === "failed" ? "error" : "warn", "A todo write did not reach storage", {
+      id,
+      outcome,
+    });
+  }
+
+  /** Records what the startup replay left behind, so the UI can say so. */
+  function notePendingWrites(flush: PendingWriteFlush): void {
+    startupBacklog.value =
+      flush.status === "failed" || (flush.status === "flushed" && flush.rejected > 0);
+  }
+
   /** Writes a todo back to storage; failures degrade inside the repository. */
   function persist(todo: Todo): void {
-    void repository.save(todo);
+    void repository.save(todo).then((outcome) => noteWriteOutcome(todo.id, outcome));
+  }
+
+  /** Removes a todo from storage, recording where the removal landed. */
+  function forget(id: string): void {
+    void repository.remove(id).then((outcome) => noteWriteOutcome(id, outcome));
   }
 
   /** Loads persisted todos into memory. Called once on app startup. */
@@ -117,7 +175,7 @@ export const useTodoStore = defineStore("todos", () => {
 
   function remove(id: string) {
     items.value = items.value.filter((todo) => todo.id !== id);
-    void repository.remove(id);
+    forget(id);
     cancelReminder(id);
     void recordOperation(buildDeleteOperation(id, new Date().toISOString()));
   }
@@ -162,7 +220,7 @@ export const useTodoStore = defineStore("todos", () => {
   /** Applies a remote delete change. Does NOT record a sync operation. */
   function applyRemoteDelete(todoId: string): void {
     items.value = items.value.filter((todo) => todo.id !== todoId);
-    void repository.remove(todoId);
+    forget(todoId);
   }
 
   /** Reschedules every open todo's reminder. Called once on app startup. */
@@ -181,6 +239,8 @@ export const useTodoStore = defineStore("todos", () => {
     items,
     activeItems,
     completedItems,
+    storageAlert,
+    notePendingWrites,
     hydrate,
     add,
     update,

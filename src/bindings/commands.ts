@@ -12,9 +12,38 @@ export const commands = {
 	saveTodo: (todo: Todo_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_todo", { todo })),
 	/**  Removes a todo by id; removing an unknown id succeeds. */
 	deleteTodo: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_todo", { id })),
+	/**
+	 *  Applies the writes the view layer is still holding outside SQLite: todos it
+	 *  had to park in its fallback store and deletions it could not perform.
+	 * 
+	 *  Every entry is applied on its own, so one unusable row cannot block the
+	 *  rest; the report says which ids the caller may drop from its journal and
+	 *  which it must keep (with the reason). An `Err` means the database itself is
+	 *  unusable and nothing at all was applied.
+	 */
+	replayPendingWrites: (upserts: Todo_Deserialize[], deletions: string[]) => typedError<PendingWriteReport, string>(__TAURI_INVOKE("replay_pending_writes", { upserts, deletions })),
 };
 
 /* Types */
+/**
+ *  Outcome of replaying the writes the view layer parked outside SQLite.
+ * 
+ *  Entries are applied one by one, so a row SQLite refuses cannot stop the
+ *  rest: accepted ids come back in `applied` and the caller drops them from its
+ *  journal, refused ones come back in `rejected` with the reason and the caller
+ *  keeps them — still shown to the user, retried on the next start.
+ */
+export type PendingWriteReport = {
+	applied: string[],
+	rejected: RejectedWrite[],
+};
+
+/**  A single entry SQLite would not take, with the reason for diagnostics. */
+export type RejectedWrite = {
+	id: string,
+	error: string,
+};
+
 export type RuntimeInfo = {
 	platform: string,
 	appVersion: string,

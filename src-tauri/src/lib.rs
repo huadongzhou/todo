@@ -17,7 +17,7 @@ use ts_rs::TS;
 #[cfg(test)]
 use ts_rs::Config;
 
-use todo_db::TodoDb;
+use todo_db::{PendingWriteReport, TodoDb};
 
 #[derive(Clone, Debug, Serialize, TS, Type)]
 #[serde(rename_all = "camelCase")]
@@ -57,12 +57,31 @@ fn delete_todo(db: tauri::State<'_, TodoDb>, id: String) -> Result<(), String> {
     db.delete(&id).map_err(|error| error.to_string())
 }
 
+/// Applies the writes the view layer is still holding outside SQLite: todos it
+/// had to park in its fallback store and deletions it could not perform.
+///
+/// Every entry is applied on its own, so one unusable row cannot block the
+/// rest; the report says which ids the caller may drop from its journal and
+/// which it must keep (with the reason). An `Err` means the database itself is
+/// unusable and nothing at all was applied.
+#[tauri::command]
+#[specta::specta]
+fn replay_pending_writes(
+    db: tauri::State<'_, TodoDb>,
+    upserts: Vec<Todo>,
+    deletions: Vec<String>,
+) -> Result<PendingWriteReport, String> {
+    db.replay_pending(&upserts, &deletions)
+        .map_err(|error| error.to_string())
+}
+
 fn ipc_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         get_runtime_info,
         list_todos,
         save_todo,
-        delete_todo
+        delete_todo,
+        replay_pending_writes
     ])
 }
 

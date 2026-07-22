@@ -7,6 +7,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useTodoStore } from "@/stores/todos";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { initSyncEngine, syncNow } from "@/lib/sync-engine";
+import { flushPendingWrites } from "@/lib/todo-repository";
 import { isTodayCardWindow } from "@/lib/today-card";
 
 const pinia = createPinia();
@@ -20,6 +21,12 @@ async function bootstrapApp(): Promise<void> {
   await useSettingsStore(pinia).bootstrap();
 
   if (isCardWindow) return;
+
+  // Move every todo still living outside SQLite into it before the first read,
+  // so hydration sees one store rather than two. Whatever the database would
+  // not take stays where it is, stays visible, and is retried next start — the
+  // store is told so it can surface that instead of silently looking fine.
+  useTodoStore(pinia).notePendingWrites(await flushPendingWrites());
 
   // Restore the local todo database before anything reads the store, so a
   // restart shows the persisted list rather than an empty one.

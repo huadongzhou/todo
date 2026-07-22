@@ -111,6 +111,15 @@ const themeOptions: ReadonlyArray<{
   { value: "system", label: "跟随系统", description: "根据设备当前主题切换" },
 ];
 
+/**
+ * Tones for the storage alert, following the semantic-colour formula in
+ * DESIGN.md ("100 底 + 700 字" light, "900/40 底 + 300 字" dark).
+ */
+const STORAGE_ALERT_CLASS: Record<"warn" | "error", string> = {
+  warn: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  error: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+};
+
 /** Converts a `datetime-local` input value to an ISO8601 instant (local tz). */
 function toInstant(value: string): string | null {
   if (!value) return null;
@@ -172,6 +181,16 @@ function updateTheme(preference: ThemePreference): void {
         </Button>
       </div>
     </header>
+
+    <p
+      v-if="todoStore.storageAlert"
+      class="mb-6 rounded-lg px-3 py-2 text-sm"
+      :class="STORAGE_ALERT_CLASS[todoStore.storageAlert.tone]"
+      role="status"
+      aria-live="polite"
+    >
+      {{ todoStore.storageAlert.message }}
+    </p>
 
     <section v-if="settingsOpen" class="surface-card mb-6 p-5" aria-labelledby="settings-heading">
       <div class="mb-5 flex items-start justify-between gap-4">
