@@ -1,0 +1,7 @@
+[workspace]
+members = ["src-tauri", "crates/contracts", "crates/domain", "crates/server"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88.0"

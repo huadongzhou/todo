@@ -1,0 +1,175 @@
+use serde::Serialize;
+use specta::Type;
+#[cfg(any(debug_assertions, test))]
+use specta_typescript::Typescript;
+use tauri::Manager;
+use tauri_plugin_store::StoreExt;
+use tauri_specta::{collect_commands, Builder};
+#[cfg(test)]
+use todo_contracts::{
+    HealthResponse, SyncOperationKind, SyncRequest, SyncResponse, Todo, TodoPatch, TodoStatus,
+    TodoSyncChange, TodoSyncOperation,
+};
+use ts_rs::TS;
+#[cfg(test)]
+use ts_rs::Config;
+
+#[derive(Clone, Debug, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeInfo {
+    pub platform: String,
+    pub app_version: String,
+}
+
+/// Returns non-sensitive runtime metadata for a typed IPC smoke test.
+#[tauri::command]
+#[specta::specta]
+fn get_runtime_info() -> RuntimeInfo {
+    RuntimeInfo {
+        platform: std::env::consts::OS.to_owned(),
+        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+    }
+}
+
+fn ipc_builder() -> Builder<tauri::Wry> {
+    Builder::<tauri::Wry>::new().commands(collect_commands![get_runtime_info])
+}
+
+#[cfg(debug_assertions)]
+fn export_type_bindings() {
+    ipc_builder()
+        .export(Typescript::default(), "../src/bindings/commands.ts")
+        .expect("failed to export tauri-specta bindings");
+}
+
+/// Reads the user's "close to tray" preference.
+///
+/// Defaults to `true`: closing the main window hides to the tray instead of exiting.
+/// Any missing / malformed value is treated as `true` so the app always degrades
+/// toward keeping its desktop presence rather than silently quitting.
+fn close_to_tray_enabled(app: &tauri::AppHandle) -> bool {
+    let store = match app.store("settings.json") {
+        Ok(store) => store,
+        Err(error) => {
+            log::warn!("Unable to open settings store for close-to-tray check: {error}");
+            return true;
+        }
+    };
+
+    store
+        .get("behavior.closeToTray")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
+
+/// Builds the application tray. Returns `None` if the tray cannot be created
+/// (e.g. a headless or restricted desktop environment), in which case the app
+/// continues without tray features rather than failing to launch.
+fn build_tray(app: &tauri::AppHandle) -> Option<()> {
+    use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+
+    let tray = TrayIconBuilder::with_id("main")
+        .tooltip("待办")
+        .icon(app.default_window_icon()?.clone())
+        .build(app)
+        .map_err(|error| log::warn!("Failed to create system tray icon: {error}"))
+        .ok()?;
+
+    let handle = app.clone();
+    tray.on_menu_event(move |tray_app, event| {
+        let id = event.id().as_ref();
+        match id {
+            "toggle" | "show" => {
+                if let Some(window) = tray_app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit" => {
+                tray_app.exit(0);
+            }
+            _ => {}
+        }
+        let _ = handle;
+    });
+
+    let handle = app.clone();
+    tray.on_tray_icon_event(move |_tray, event| {
+        if let TrayIconEvent::DoubleClick { .. } = event {
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+    });
+
+    Some(())
+}
+
+fn setup_tray(app: &tauri::AppHandle) {
+    if build_tray(app).is_none() {
+        log::warn!("Running without system tray; close will exit the application");
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    #[cfg(debug_assertions)]
+    export_type_bindings();
+
+    let ipc_builder = ipc_builder();
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::default().build())
+        .setup(|app| {
+            setup_tray(app.handle());
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            use tauri::WindowEvent;
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if close_to_tray_enabled(window.app_handle()) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .invoke_handler(ipc_builder.invoke_handler())
+        .run(tauri::generate_context!())
+        .expect("error while running Todo application");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn frontend_bindings_path(file_name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/bindings")
+            .join(file_name)
+    }
+
+    #[test]
+    fn export_type_bindings() {
+        let models_config = Config::new().with_out_dir(frontend_bindings_path("models"));
+
+        Todo::export(&models_config).expect("failed to export Todo type");
+        TodoStatus::export(&models_config).expect("failed to export TodoStatus type");
+        TodoPatch::export(&models_config).expect("failed to export TodoPatch type");
+        SyncOperationKind::export(&models_config).expect("export SyncOperationKind type");
+        TodoSyncOperation::export(&models_config).expect("export TodoSyncOperation type");
+        TodoSyncChange::export(&models_config).expect("export TodoSyncChange type");
+        SyncRequest::export(&models_config).expect("export SyncRequest type");
+        SyncResponse::export(&models_config).expect("export SyncResponse type");
+        HealthResponse::export(&models_config).expect("export HealthResponse type");
+        RuntimeInfo::export(&models_config).expect("export RuntimeInfo type");
+        ipc_builder()
+            .export(Typescript::default(), frontend_bindings_path("commands.ts"))
+            .expect("export tauri-specta bindings");
+    }
+}
