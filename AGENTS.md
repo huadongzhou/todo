@@ -150,7 +150,7 @@ flowchart LR
 - 页面结构使用语义化 HTML；表单控件必须关联可见标签或可访问名称。
 - 图标按钮、弹窗与状态提示必须提供可访问文本、键盘操作和恰当的 ARIA 属性。
 - 不使用内联事件处理器或内联样式承载业务逻辑。
- 
+
 #### CSS
 
 - 使用 UnoCSS 与项目设计令牌实现样式；优先复用 shadcn-vue 组件和已有样式约定。
@@ -165,8 +165,6 @@ flowchart LR
 - 页面负责组合布局与路由上下文，可复用交互沉淀为组件；状态与副作用集中在 Pinia store 或组合式函数。
 - 模板中的列表必须提供稳定 `key`；异步视图必须显式处理加载、空数据和错误状态。
 - Pinia store 使用 setup 语法 `defineStore("<名>", () => { ... })` 并导出 `useXxxStore`。
-
-
 
 ## 应用命令
 
@@ -188,4 +186,3 @@ cargo check --workspace
 移动端首次配置在对应工具链机器的仓库根目录执行 `pnpm run tauri android init` 或 `pnpm run tauri ios init`。Android 需要 Android SDK；iOS 初始化和构建仅可在 macOS/Xcode 环境执行。
 
 当前阶段验证标准：前端尚未接入测试框架，行为变更以 `pnpm run check` 通过并经 `pnpm run dev` 或 `pnpm run tauri:dev` 手动走查为验证证据；Rust 变更以 `cargo test --workspace` 与 `cargo check --workspace` 通过为准；契约或类型变更必须运行 `pnpm run types:generate` 并确认生成结果与调用方同步。
-

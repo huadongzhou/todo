@@ -26,30 +26,30 @@
 
 ### 品牌色（现状）
 
-| 令牌 | 值 | 出处与用法 |
-|---|---|---|
-| `brand` | `#0ea5e9`（sky-500） | `uno.config.ts` theme.colors；主按钮底色、焦点环 |
-| brand 交互态 | sky-600 `#0284c7` | hover 加深（Button.vue `hover:bg-sky-600`） |
+| 令牌         | 值                   | 出处与用法                                       |
+| ------------ | -------------------- | ------------------------------------------------ |
+| `brand`      | `#0ea5e9`（sky-500） | `uno.config.ts` theme.colors；主按钮底色、焦点环 |
+| brand 交互态 | sky-600 `#0284c7`    | hover 加深（Button.vue `hover:bg-sky-600`）      |
 
 ### 中性色（现状：slate 阶）
 
-| 用途 | 浅色 | 暗色 |
-|---|---|---|
-| 页面背景 | slate-50 `#f8fafc` | slate-950 `#020617` |
-| 卡片表面 | white | slate-950 |
-| 正文 | slate-900 `#0f172a` | slate-200 `#e2e8f0` |
-| 次要文字 | slate-600 | slate-300/400 |
-| 边框与分隔线 | slate-200 | slate-800 |
+| 用途         | 浅色                | 暗色                |
+| ------------ | ------------------- | ------------------- |
+| 页面背景     | slate-50 `#f8fafc`  | slate-950 `#020617` |
+| 卡片表面     | white               | slate-950           |
+| 正文         | slate-900 `#0f172a` | slate-200 `#e2e8f0` |
+| 次要文字     | slate-600           | slate-300/400       |
+| 边框与分隔线 | slate-200           | slate-800           |
 
 来源：`src/styles/main.css` 与 `uno.config.ts` 的 `surface-card`。新增灰阶取值一律使用 slate，不混入 gray/zinc/neutral。
 
 ### 语义色（现状：到期状态三档，`src/lib/dueDate.ts`）
 
-| 语义 | 浅色 | 暗色 |
-|---|---|---|
-| overdue（逾期/危险） | `bg-red-100 text-red-700` | `dark:bg-red-900/40 dark:text-red-300` |
-| soon（临近/警示） | `bg-amber-100 text-amber-700` | `dark:bg-amber-900/40 dark:text-amber-300` |
-| normal（常规） | `bg-slate-100 text-slate-600` | `dark:bg-slate-800 dark:text-slate-300` |
+| 语义                 | 浅色                          | 暗色                                       |
+| -------------------- | ----------------------------- | ------------------------------------------ |
+| overdue（逾期/危险） | `bg-red-100 text-red-700`     | `dark:bg-red-900/40 dark:text-red-300`     |
+| soon（临近/警示）    | `bg-amber-100 text-amber-700` | `dark:bg-amber-900/40 dark:text-amber-300` |
+| normal（常规）       | `bg-slate-100 text-slate-600` | `dark:bg-slate-800 dark:text-slate-300`    |
 
 基准：新的语义场景（成功、错误提示等）沿用同一公式——浅色「100 底 + 700 字」、暗色「900/40 底 + 300 字」；成功色用 emerald。语义色必须伴随文字或图标，禁止只靠颜色区分状态。
 
