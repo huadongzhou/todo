@@ -4,12 +4,13 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-  /**  Returns non-sensitive runtime metadata for a typed IPC smoke test. */
-  getRuntimeInfo: () => __TAURI_INVOKE<RuntimeInfo>("get_runtime_info"),
+	/**  Returns non-sensitive runtime metadata for a typed IPC smoke test. */
+	getRuntimeInfo: () => __TAURI_INVOKE<RuntimeInfo>("get_runtime_info"),
 };
 
 /* Types */
 export type RuntimeInfo = {
-  platform: string;
-  appVersion: string;
+	platform: string,
+	appVersion: string,
 };
+

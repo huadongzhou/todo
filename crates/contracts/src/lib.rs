@@ -14,10 +14,10 @@ pub struct Todo {
     pub created_at: String,
     pub completed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional = nullable)]
     pub due_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional = nullable)]
     pub reminder_at: Option<String>,
 }
 

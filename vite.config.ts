@@ -5,7 +5,9 @@ import UnoCSS from "unocss/vite";
 
 export default defineConfig({
   fmt: {
-    ignorePatterns: [".agents/**", "docs/**", "dist/**", "src-tauri/**"],
+    // src/bindings/** is emitted verbatim by ts-rs / tauri-specta on `pnpm run types:generate`
+    // (i.e. `cargo test`), so formatting it would be undone by the next generation run.
+    ignorePatterns: [".agents/**", "docs/**", "dist/**", "src-tauri/**", "src/bindings/**"],
   },
   lint: {
     ignorePatterns: [".agents/**", "docs/**", "dist/**", "src-tauri/**"],
