@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "today-card",
+  "description": "Minimal capability for the today-card window (label `today`, loads index.html?card=today). It only needs cross-window events, the settings store reads its theme comes from, native theme application and diagnostics logging.",
+  "windows": ["today"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:window:allow-set-theme",
+    "store:allow-load",
+    "store:allow-get",
+    "log:default"
+  ]
+}

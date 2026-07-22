@@ -114,7 +114,7 @@ flowchart LR
 #### 客户端
 
 - 新增原生能力：在 `src-tauri/src/lib.rs` 编写 `#[tauri::command]` + `#[specta::specta]` 函数并注册进 `collect_commands![...]`，运行 `pnpm run types:generate` 刷新 `src/bindings/commands.ts` 后前端方可调用。
-- 系统权限在 `src-tauri/capabilities/default.json` 按最小权限声明，只加当前需求用到的能力。
+- 系统权限在 `src-tauri/capabilities/` 下按最小权限声明，只加当前需求用到的能力；`default.json` 覆盖主窗口，需要按窗口收窄权限时另建以窗口标签命名的 capability 文件（如 `today-card.json` 用 `"windows": ["today"]`），窗口集不相交的多份文件按窗口叠加生效。
 - 原生侧失败必须容错降级而非中断应用（如托盘创建失败继续运行、设置读取失败取默认值），以 `log::warn!` 记录原因。
 
 #### 服务端

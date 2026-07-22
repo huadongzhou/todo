@@ -49,7 +49,16 @@ export const useSettingsStore = defineStore("settings", () => {
       closeToTray.value = true;
       showTodayCard.value = false;
       persistenceError.value = "设置恢复失败，已使用系统默认值。";
-      await applyTheme(theme.value);
+      // The fallback itself must never throw: `main.ts` awaits `bootstrap()`
+      // before mounting, so a second failure here would take the whole UI down
+      // instead of degrading to defaults. `applyTheme` writes the DOM theme
+      // before touching the native window, so the document stays styled even
+      // when the native call is the part that fails.
+      try {
+        await applyTheme(theme.value);
+      } catch {
+        /* best effort: the DOM theme is already applied */
+      }
       writeDiagnostic("warn", "Settings bootstrap failed; using defaults");
     } finally {
       isReady.value = true;
