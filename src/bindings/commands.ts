@@ -6,6 +6,12 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	/**  Returns non-sensitive runtime metadata for a typed IPC smoke test. */
 	getRuntimeInfo: () => __TAURI_INVOKE<RuntimeInfo>("get_runtime_info"),
+	/**  Returns every locally stored todo, newest first. */
+	listTodos: () => typedError<Todo_Serialize[], string>(__TAURI_INVOKE("list_todos")),
+	/**  Inserts a todo or overwrites the stored row with the same id. */
+	saveTodo: (todo: Todo_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_todo", { todo })),
+	/**  Removes a todo by id; removing an unknown id succeeds. */
+	deleteTodo: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_todo", { id })),
 };
 
 /* Types */
@@ -13,4 +19,38 @@ export type RuntimeInfo = {
 	platform: string,
 	appVersion: string,
 };
+
+export type Todo = Todo_Serialize | Todo_Deserialize;
+
+export type TodoStatus = "open" | "completed";
+
+export type Todo_Deserialize = {
+	id: string,
+	title: string,
+	status: TodoStatus,
+	createdAt: string,
+	completedAt: string | null,
+	dueDate?: string | null,
+	reminderAt?: string | null,
+};
+
+export type Todo_Serialize = {
+	id: string,
+	title: string,
+	status: TodoStatus,
+	createdAt: string,
+	completedAt: string | null,
+	dueDate?: string | null,
+	reminderAt?: string | null,
+};
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}
 

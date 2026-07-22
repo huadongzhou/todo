@@ -104,7 +104,7 @@
 ├── 6 数据与同步
 │   ├── 6.1 本地持久化
 │   │   ├── ✅ Store 键值持久化（桌面；浏览器开发回退 localStorage）
-│   │   ├── ⏳ SQLite 落地：客户端 + 移动端统一本地库，同步与周期任务的数据底座
+│   │   ├── 🚧 SQLite 落地：桌面端已落地（rusqlite + command，repository 收口，非 Tauri 回退 localStorage），移动端待随移动形态验证
 │   │   └── ⏳ 数据迁移：Store → SQLite 一次性迁移
 │   ├── 6.2 自动同步
 │   │   ├── ✅ 操作式同步：桌面 ↔ Axum，op-based，冲突服务端优先、字段级合并

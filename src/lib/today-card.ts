@@ -38,9 +38,24 @@ function errorMessage(error: unknown): string {
 
 export const TODAY_CARD_LABEL = "today";
 const TODAY_CARD_URL = "index.html?card=today";
+const TODAY_CARD_QUERY_KEY = "card";
+const TODAY_CARD_QUERY_VALUE = "today";
 const CARD_WIDTH = 360;
 const CARD_HEIGHT = 480;
 const CARD_MARGIN = 24;
+
+/**
+ * Whether the current webview is the card window (it loads `TODAY_CARD_URL`).
+ * The URL is fixed for the lifetime of a webview, so callers can read this once
+ * at startup. Every window-scoped startup step that only belongs to the main
+ * window checks this first.
+ */
+export function isTodayCardWindow(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    new URLSearchParams(window.location.search).get(TODAY_CARD_QUERY_KEY) === TODAY_CARD_QUERY_VALUE
+  );
+}
 
 /** Resolves the monitor to anchor the card on, with graceful fallbacks. */
 async function resolveMonitor(): Promise<Monitor | null> {

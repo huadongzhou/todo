@@ -13,7 +13,12 @@ import Button from "@/components/ui/button/Button.vue";
 import TodayCard from "@/components/TodayCard.vue";
 import type { ThemePreference } from "@/lib/appearance";
 import { dueDateTone, formatDueDate, TONE_LABEL_CLASS } from "@/lib/dueDate";
-import { closeTodayCard, openTodayCard, isTodayCardOpen } from "@/lib/today-card";
+import {
+  closeTodayCard,
+  openTodayCard,
+  isTodayCardOpen,
+  isTodayCardWindow,
+} from "@/lib/today-card";
 import { setupTodayCardSync } from "@/lib/today-card-sync";
 import {
   deviceId,
@@ -37,9 +42,7 @@ import { useTodoStore } from "@/stores/todos";
  * window. The URL is fixed per webview, so a one-time read at setup is enough
  * to decide which surface to render.
  */
-const isCard =
-  typeof window !== "undefined" &&
-  new URLSearchParams(window.location.search).get("card") === "today";
+const isCard = isTodayCardWindow();
 
 const todoStore = useTodoStore();
 const settingsStore = useSettingsStore();

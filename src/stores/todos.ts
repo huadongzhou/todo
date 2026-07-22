@@ -5,6 +5,7 @@ import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { buildDeleteOperation, buildUpsertOperation, recordOperation } from "@/lib/sync-engine";
+import { todoRepository } from "@/lib/todo-repository";
 
 export interface NewTodoInput {
   readonly title: string;
@@ -18,6 +19,18 @@ export const useTodoStore = defineStore("todos", () => {
   const items = ref<Todo[]>([]);
   const activeItems = computed(() => items.value.filter((todo) => todo.status === "open"));
   const completedItems = computed(() => items.value.filter((todo) => todo.status === "completed"));
+  const repository = todoRepository();
+
+  /** Writes a todo back to storage; failures degrade inside the repository. */
+  function persist(todo: Todo): void {
+    void repository.save(todo);
+  }
+
+  /** Loads persisted todos into memory. Called once on app startup. */
+  async function hydrate(): Promise<void> {
+    items.value = await repository.load();
+    writeDiagnostic("info", "Todos restored from local storage", { count: items.value.length });
+  }
 
   function add(input: string | NewTodoInput) {
     const normalized = typeof input === "string" ? input.trim() : input.title.trim();
@@ -34,6 +47,7 @@ export const useTodoStore = defineStore("todos", () => {
     };
 
     items.value.unshift(todo);
+    persist(todo);
     void scheduleReminder(todo);
     void recordOperation(
       buildUpsertOperation(
@@ -61,6 +75,7 @@ export const useTodoStore = defineStore("todos", () => {
     if (patch.dueDate !== undefined) todo.dueDate = patch.dueDate;
     if (patch.reminderAt !== undefined) todo.reminderAt = patch.reminderAt;
 
+    persist(todo);
     void scheduleReminder(todo);
     void recordOperation(
       buildUpsertOperation(
@@ -83,6 +98,8 @@ export const useTodoStore = defineStore("todos", () => {
     todo.completedAt = completed ? new Date().toISOString() : null;
     const occurredAt = new Date().toISOString();
 
+    persist(todo);
+
     if (completed) {
       cancelReminder(id);
     } else {
@@ -100,6 +117,7 @@ export const useTodoStore = defineStore("todos", () => {
 
   function remove(id: string) {
     items.value = items.value.filter((todo) => todo.id !== id);
+    void repository.remove(id);
     cancelReminder(id);
     void recordOperation(buildDeleteOperation(id, new Date().toISOString()));
   }
@@ -120,13 +138,14 @@ export const useTodoStore = defineStore("todos", () => {
       if (patch?.status !== undefined) existing.status = patch.status;
       if (patch?.dueDate !== undefined) existing.dueDate = patch.dueDate;
       if (patch?.completedAt !== undefined) existing.completedAt = patch.completedAt;
+      persist(existing);
       return;
     }
 
     // Unknown todo: materialise it from the patch. A valid upsert patch always
     // carries a title (enforced by the server contract).
     if (patch?.title) {
-      items.value.unshift({
+      const created: Todo = {
         id: todoId,
         title: patch.title,
         status: patch.status ?? "open",
@@ -134,13 +153,16 @@ export const useTodoStore = defineStore("todos", () => {
         completedAt: patch.completedAt ?? null,
         dueDate: patch.dueDate ?? null,
         reminderAt: null,
-      });
+      };
+      items.value.unshift(created);
+      persist(created);
     }
   }
 
   /** Applies a remote delete change. Does NOT record a sync operation. */
   function applyRemoteDelete(todoId: string): void {
     items.value = items.value.filter((todo) => todo.id !== todoId);
+    void repository.remove(todoId);
   }
 
   /** Reschedules every open todo's reminder. Called once on app startup. */
@@ -159,6 +181,7 @@ export const useTodoStore = defineStore("todos", () => {
     items,
     activeItems,
     completedItems,
+    hydrate,
     add,
     update,
     toggle,

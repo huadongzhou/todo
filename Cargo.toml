@@ -5,3 +5,8 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 rust-version = "1.88.0"
+
+[workspace.dependencies]
+# `bundled` compiles SQLite from source so no system sqlite3 is required on any
+# target platform (Windows in particular ships none).
+rusqlite = { version = "0.40.1", features = ["bundled"] }

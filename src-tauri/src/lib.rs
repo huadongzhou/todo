@@ -1,3 +1,5 @@
+mod todo_db;
+
 use serde::Serialize;
 use specta::Type;
 #[cfg(any(debug_assertions, test))]
@@ -5,14 +7,17 @@ use specta_typescript::Typescript;
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 use tauri_specta::{collect_commands, Builder};
+use todo_contracts::Todo;
 #[cfg(test)]
 use todo_contracts::{
-    HealthResponse, SyncOperationKind, SyncRequest, SyncResponse, Todo, TodoPatch, TodoStatus,
+    HealthResponse, SyncOperationKind, SyncRequest, SyncResponse, TodoPatch, TodoStatus,
     TodoSyncChange, TodoSyncOperation,
 };
 use ts_rs::TS;
 #[cfg(test)]
 use ts_rs::Config;
+
+use todo_db::TodoDb;
 
 #[derive(Clone, Debug, Serialize, TS, Type)]
 #[serde(rename_all = "camelCase")]
@@ -31,8 +36,34 @@ fn get_runtime_info() -> RuntimeInfo {
     }
 }
 
+/// Returns every locally stored todo, newest first.
+#[tauri::command]
+#[specta::specta]
+fn list_todos(db: tauri::State<'_, TodoDb>) -> Result<Vec<Todo>, String> {
+    db.list().map_err(|error| error.to_string())
+}
+
+/// Inserts a todo or overwrites the stored row with the same id.
+#[tauri::command]
+#[specta::specta]
+fn save_todo(db: tauri::State<'_, TodoDb>, todo: Todo) -> Result<(), String> {
+    db.save(&todo).map_err(|error| error.to_string())
+}
+
+/// Removes a todo by id; removing an unknown id succeeds.
+#[tauri::command]
+#[specta::specta]
+fn delete_todo(db: tauri::State<'_, TodoDb>, id: String) -> Result<(), String> {
+    db.delete(&id).map_err(|error| error.to_string())
+}
+
 fn ipc_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![get_runtime_info])
+    Builder::<tauri::Wry>::new().commands(collect_commands![
+        get_runtime_info,
+        list_todos,
+        save_todo,
+        delete_todo
+    ])
 }
 
 #[cfg(debug_assertions)]
@@ -112,6 +143,29 @@ fn setup_tray(app: &tauri::AppHandle) {
     }
 }
 
+/// Opens the todo database inside the app data directory. A failure here is not
+/// fatal: the store degrades to unavailable, the todo commands report an error
+/// and the view layer keeps working on its browser storage fallback.
+fn setup_todo_db(app: &tauri::AppHandle) -> TodoDb {
+    let directory = match app.path().app_data_dir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            log::warn!("Unable to resolve the app data directory for the todo database: {error}");
+            return TodoDb::unavailable();
+        }
+    };
+
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        log::warn!(
+            "Unable to create the app data directory {}: {error}",
+            directory.display()
+        );
+        return TodoDb::unavailable();
+    }
+
+    TodoDb::open(&directory.join("todos.db"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(debug_assertions)]
@@ -125,6 +179,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .setup(|app| {
+            app.manage(setup_todo_db(app.handle()));
             setup_tray(app.handle());
             Ok(())
         })
