@@ -18,6 +18,12 @@ todo-server.db
 todo-server.db-wal
 todo-server.db-shm
 
+# Sync log snapshots (default BACKUP_DIR), the databases a restore keeps and
+# the half-written copy a failed restore may leave behind
+todo-server-backups/
+todo-server.db.before-*
+todo-server.db.restoring
+
 # Other files and folders
 .settings/
 

@@ -1,3 +1,4 @@
+pub mod backup;
 mod sync_store;
 
 use std::sync::Arc;
@@ -32,6 +33,15 @@ pub struct SyncService {
 impl SyncService {
     pub fn new(store: SyncStore) -> Self {
         Self { store }
+    }
+
+    /// The log the service reads and writes.
+    ///
+    /// The snapshot schedule copies it through this store rather than through a
+    /// connection of its own, which is what keeps revision numbering the
+    /// single-connection affair `SyncStore::with_log` describes.
+    pub fn store(&self) -> &SyncStore {
+        &self.store
     }
 
     pub fn sync(&self, request: SyncRequest) -> Result<SyncResponse, ServerError> {
@@ -155,11 +165,14 @@ struct ErrorResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use axum::{body::Body, http::Request};
     use todo_contracts::{SyncCursor, SyncOperationKind, TodoPatch, TodoStatus, TodoSyncOperation};
     use tower::ServiceExt;
 
     use super::*;
+    use crate::backup::BackupPolicy;
 
     fn service() -> SyncService {
         SyncService::new(SyncStore::in_memory().expect("open an in-memory log"))
@@ -189,7 +202,8 @@ mod tests {
         }
     }
 
-    /// A file path no other test shares, cleaned up with its WAL sidecars.
+    /// A file path no other test shares, cleaned up with everything that ends
+    /// up next to it.
     struct TempDatabase {
         path: std::path::PathBuf,
     }
@@ -203,12 +217,37 @@ mod tests {
             database
         }
 
+        /// Everything whose name starts with the database's: the WAL sidecars,
+        /// the snapshots taken of it and whatever a restore moved aside.
         fn remove(&self) {
-            for suffix in ["", "-wal", "-shm"] {
-                let mut path = self.path.clone().into_os_string();
-                path.push(suffix);
-                let _ = std::fs::remove_file(path);
+            let (Some(directory), Some(name)) = (
+                self.path.parent(),
+                self.path.file_name().and_then(|name| name.to_str()),
+            ) else {
+                return;
+            };
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                return;
+            };
+
+            for entry in entries.flatten() {
+                if !entry.file_name().to_string_lossy().starts_with(name) {
+                    continue;
+                }
+                let path = entry.path();
+                if path.is_dir() {
+                    let _ = std::fs::remove_dir_all(path);
+                } else {
+                    let _ = std::fs::remove_file(path);
+                }
             }
+        }
+
+        /// Where snapshots of this database go.
+        fn snapshot_directory(&self) -> std::path::PathBuf {
+            let mut path = self.path.clone().into_os_string();
+            path.push("-snapshots");
+            std::path::PathBuf::from(path)
         }
 
         /// Stands in for a server process: a service over the same file, with
@@ -464,5 +503,129 @@ mod tests {
         assert_eq!(after.next_cursor, 1);
         assert_eq!(after.changes.len(), 1);
         assert_eq!(after.changes[0].operation_id, "operation-1");
+    }
+
+    fn snapshot_policy(database: &TempDatabase) -> BackupPolicy {
+        BackupPolicy {
+            directory: database.snapshot_directory(),
+            interval: Duration::from_secs(backup::DEFAULT_INTERVAL_SECONDS),
+            keep: backup::DEFAULT_KEEP,
+        }
+    }
+
+    #[test]
+    fn a_service_started_from_a_snapshot_numbers_new_operations_after_the_ones_in_it() {
+        let database = TempDatabase::new("snapshot-restart");
+        let policy = snapshot_policy(&database);
+
+        let snapshot = {
+            let service = database.restart();
+            service
+                .sync(request("operation-1", 0))
+                .expect("the first operation is accepted");
+            service
+                .sync(request("operation-2", 1))
+                .expect("the second operation is accepted");
+            backup::take_snapshot(service.store(), &policy).expect("take a snapshot")
+        };
+
+        // Work carried on after the copy was taken, and then the live file was
+        // lost — which is the only reason anybody reaches for a snapshot.
+        {
+            let service = database.restart();
+            service
+                .sync(request("operation-3", 2))
+                .expect("the third operation is accepted");
+        }
+
+        let restored = backup::restore(&snapshot, &database.path).expect("restore the snapshot");
+        assert_eq!(restored.latest_revision, 2);
+
+        let after = database
+            .restart()
+            .sync(request("operation-4", 0))
+            .expect("sync after the restore succeeds");
+
+        // The new operation has to carry on from the snapshot rather than start
+        // over: revision 1 handed out twice would leave two different
+        // operations looking like one to every device that pulls them.
+        assert_eq!(after.next_cursor, 3);
+        let revisions: Vec<SyncCursor> = after.changes.iter().map(|c| c.revision).collect();
+        assert_eq!(revisions, vec![1, 2, 3]);
+        assert_eq!(after.changes[2].operation_id, "operation-4");
+    }
+
+    #[test]
+    fn revisions_stay_unique_and_gapless_while_snapshots_are_taken_alongside_syncs() {
+        const DEVICES: usize = 8;
+        const OPERATIONS_EACH: usize = 4;
+
+        let database = TempDatabase::new("concurrent-snapshots");
+        let policy = snapshot_policy(&database);
+        let service = Arc::new(database.restart());
+
+        std::thread::scope(|scope| {
+            for device in 0..DEVICES {
+                let service = Arc::clone(&service);
+                scope.spawn(move || {
+                    for index in 0..OPERATIONS_EACH {
+                        service
+                            .sync(request(&format!("operation-{device}-{index}"), 0))
+                            .expect("sync succeeds");
+                    }
+                });
+            }
+
+            // Snapshots run against the same store as the requests. What this
+            // asserts is that taking them costs the numbering nothing: no
+            // revision skipped, none handed out twice, and no snapshot holding
+            // half an operation. It is not a test of the single-connection
+            // rule — a `snapshot_into` rewritten to open a second connection
+            // would leave the sync side numbering through the original one, so
+            // this would still pass. What rules that out is the note on
+            // `SyncStore::with_log` and reading anything that opens the file.
+            let snapshots = Arc::clone(&service);
+            scope.spawn(move || {
+                for _ in 0..DEVICES {
+                    backup::take_snapshot(snapshots.store(), &policy).expect("take a snapshot");
+                }
+            });
+        });
+
+        let total = (DEVICES * OPERATIONS_EACH) as SyncCursor;
+        let after = service
+            .sync(SyncRequest {
+                device_id: "desktop-late".to_owned(),
+                cursor: 0,
+                operations: Vec::new(),
+            })
+            .expect("pull everything");
+
+        let revisions: Vec<SyncCursor> = after.changes.iter().map(|c| c.revision).collect();
+        assert_eq!(
+            revisions,
+            (1..=total).collect::<Vec<SyncCursor>>(),
+            "every operation must get its own revision, with none skipped"
+        );
+        assert_eq!(after.next_cursor, total);
+
+        // Each snapshot has to be a log in its own right: a copy taken while
+        // requests were in flight must hold whole operations, not part of one.
+        let mut snapshots = 0;
+        for entry in std::fs::read_dir(database.snapshot_directory())
+            .expect("list the snapshots")
+            .flatten()
+        {
+            let copy = SyncStore::open_snapshot(&entry.path()).expect("open a snapshot");
+            let (latest, changes) = copy
+                .with_log(|log| {
+                    Ok::<_, SyncStoreError>((log.latest_revision()?, log.changes_since(0)?))
+                })
+                .expect("read a snapshot");
+            let revisions: Vec<SyncCursor> = changes.iter().map(|c| c.revision).collect();
+            assert_eq!(revisions, (1..=latest).collect::<Vec<SyncCursor>>());
+            snapshots += 1;
+        }
+        assert_eq!(snapshots, DEVICES);
     }
 }
