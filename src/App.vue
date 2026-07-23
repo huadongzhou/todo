@@ -107,12 +107,15 @@ onMounted(async () => {
   });
 
   // The rules a new day brings. Registered here rather than at startup because
-  // the row being edited is the page's to know, and both rules step over it.
+  // the row being edited is the page's to know, and every rule steps over it.
+  // `advanceRecurrences` is the recurring half — it walks the engine, so it is
+  // async and fired without awaiting; `runDayStart` stays synchronous.
   stopDayRollover = registerDayRollover(() => {
     todoStore.runDayStart({
       rolloverOverdue: settingsStore.rolloverOverdue,
       skipId: editingId.value,
     });
+    void todoStore.advanceRecurrences({ skipId: editingId.value });
   });
 
   const registered = await registerShortcuts({ toggleQuickAdd });

@@ -11,13 +11,13 @@ use specta_typescript::Typescript;
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 use tauri_specta::{collect_commands, Builder};
-use todo_contracts::Todo;
-use todo_domain::ics;
+use todo_contracts::{RecurrenceRule, Todo};
+use todo_domain::{ics, recurrence};
 #[cfg(test)]
 use todo_contracts::{
-    Attachment, AttachmentKind, HealthResponse, RecurrenceCalendar, RecurrenceFrequency,
-    RecurrenceRule, Subtask, SyncOperationKind, SyncRequest, SyncResponse, TodoPatch, TodoStatus,
-    TodoSyncChange, TodoSyncOperation, Weekday,
+    Attachment, AttachmentKind, HealthResponse, RecurrenceCalendar, RecurrenceFrequency, Subtask,
+    SyncOperationKind, SyncRequest, SyncResponse, TodoPatch, TodoStatus, TodoSyncChange,
+    TodoSyncOperation, Weekday,
 };
 use ts_rs::TS;
 #[cfg(test)]
@@ -66,6 +66,29 @@ fn save_todo(db: tauri::State<'_, TodoDb>, todo: Todo) -> Result<(), WriteReject
 #[specta::specta]
 fn delete_todo(db: tauri::State<'_, TodoDb>, id: String) -> Result<(), String> {
     db.delete(&id).map_err(|error| error.to_string())
+}
+
+/// The next date a repeat rule lands on strictly after `after`, or `null` when
+/// the series has ended.
+///
+/// The rule engine is a pure `todo-domain` function and the app's single source
+/// of "when does this repeat"; the view layer reaches it through this command to
+/// generate a recurring task's next instance rather than reimplementing the rule
+/// in TypeScript, which would be a second interpretation waiting to disagree with
+/// the exported calendar. Only the date is returned: the engine's working-day
+/// caveat is a display concern the list does not carry, and generating the next
+/// instance needs the date alone. `anchor` and `after` are local `YYYY-MM-DD`
+/// dates, the shape a due date is stored in.
+#[tauri::command]
+#[specta::specta]
+fn next_occurrence(
+    rule: RecurrenceRule,
+    anchor: String,
+    after: String,
+) -> Result<Option<String>, String> {
+    recurrence::next_occurrence(&rule, &anchor, &after)
+        .map(|occurrence| occurrence.map(|occurrence| occurrence.date))
+        .map_err(|error| error.to_string())
 }
 
 /// Applies the writes the view layer is still holding outside SQLite: todos it
@@ -271,7 +294,8 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             save_todo,
             delete_todo,
             replay_pending_writes,
-            export_calendar
+            export_calendar,
+            next_occurrence
         ])
         // The two contract limits a user can reach by typing, so the view layer
         // caps both inputs at the numbers the contract enforces. Sharing the
@@ -471,6 +495,56 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    fn recurrence_rule(
+        frequency: RecurrenceFrequency,
+        calendar: RecurrenceCalendar,
+    ) -> RecurrenceRule {
+        RecurrenceRule {
+            frequency,
+            interval: 1,
+            weekdays: Vec::new(),
+            month_day: None,
+            on_last_day: false,
+            calendar,
+            until: None,
+            count: None,
+        }
+    }
+
+    /// The command is a thin wrapper, so its job is only to reach the engine and
+    /// hand back its three answers as the view layer reads them: a date, `null`
+    /// for a series that has ended, and an error string rather than a panic for a
+    /// date it cannot read. The engine's own correctness is `todo-domain`'s to
+    /// test.
+    #[test]
+    fn next_occurrence_hands_the_engine_answer_to_the_view_layer() {
+        let weekly = recurrence_rule(
+            RecurrenceFrequency::Weekly,
+            RecurrenceCalendar::Gregorian,
+        );
+        // 2026-07-23 is a Thursday; the next weekly landing is a week on.
+        assert_eq!(
+            next_occurrence(weekly.clone(), "2026-07-23".to_owned(), "2026-07-23".to_owned()),
+            Ok(Some("2026-07-30".to_owned()))
+        );
+
+        // A rule that repeats once has no successor: the anchor is its only
+        // occurrence, so the command must answer `null`, which is what tells the
+        // view layer to complete the task without generating.
+        let once = RecurrenceRule {
+            count: Some(1),
+            ..weekly.clone()
+        };
+        assert_eq!(
+            next_occurrence(once, "2026-07-23".to_owned(), "2026-07-23".to_owned()),
+            Ok(None)
+        );
+
+        // An unreadable date is an error string, never a panic that would take
+        // down the IPC call.
+        assert!(next_occurrence(weekly, "not-a-date".to_owned(), "2026-07-23".to_owned()).is_err());
     }
 
     fn frontend_bindings_path(file_name: &str) -> PathBuf {

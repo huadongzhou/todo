@@ -44,7 +44,7 @@ use crate::civil::{
     add_days, add_months, days_in_month, format_iso_date, parse_date, weekday_index, CivilDate,
 };
 use crate::holidays;
-use crate::lunar::{self, LunarDate};
+use crate::lunar::{self, LunarDate, LunarMonth};
 
 /// How many positions a rule may name that the calendar does not have before the
 /// search gives up.
@@ -191,11 +191,19 @@ fn next_date(
     // that calendar, so an anchor outside the years it knows is refused here,
     // before the walk. Afterwards the only way the walk can meet that refusal is
     // by running off the far end, which is a different thing and answered
-    // differently below.
-    if counts_in_lunar_months(rule) {
-        lunar_anchor(anchor)?;
-    }
+    // differently below. Read once and carried in the cursor, so the walk's
+    // lunar positions need not convert the civil anchor again at every step.
+    let anchor_in_lunar = if counts_in_lunar_months(rule) {
+        Some(lunar_anchor(anchor)?)
+    } else {
+        None
+    };
 
+    let mut cursor = Cursor {
+        lunar_anchor: anchor_in_lunar,
+        workday: None,
+        lunar_month: None,
+    };
     let mut current = anchor;
     let mut index: u32 = 1;
     let mut position: u64 = 0;
@@ -219,7 +227,7 @@ fn next_date(
         let next = loop {
             let taken = position;
             position += 1;
-            match candidate(rule, anchor, &weekdays, taken) {
+            match cursor.candidate(rule, anchor, &weekdays, taken) {
                 Ok(Some(date)) if date > current => break date,
                 // A position the calendar does not have (the 31st of a 30-day
                 // month). RFC 5545 skips it rather than moving it to the 30th,
@@ -262,131 +270,200 @@ fn next_date(
     }
 }
 
-/// The date at `position` of the rule's own counting, or `None` when that
-/// position names a day the calendar does not have.
+/// The walk's running state, so the two frequencies that reach a position by
+/// counting from the anchor — a working-day rule counting working days, a lunar
+/// monthly rule counting lunar months — step to the next position from the last
+/// instead of counting the whole way from the anchor at every position.
 ///
-/// Position 0 is where the rule starts counting, which is the anchor for every
-/// frequency except a monthly or weekly rule that names days of its own — there
-/// it is the first named day of the anchor's own month or week, which may fall
-/// before the anchor. The caller filters those out; generating them keeps the
-/// positions evenly spaced, which is what makes an interval mean the same thing
-/// in every frequency.
-///
-/// `Ok(None)` says "this position exists but the calendar has no such day",
-/// which the caller steps past. `Err` says "the calendar does not reach this
-/// position at all", which it cannot: the caller decides from what it was asking
-/// whether that ends the series or refuses it.
-fn candidate(
-    rule: &RecurrenceRule,
-    anchor: CivilDate,
-    weekdays: &[i64],
-    position: u64,
-) -> Result<Option<CivilDate>, RecurrenceError> {
-    let interval = i64::from(rule.interval);
-    let position = position as i64;
-    // The calendar decides what a month and a year are, and nothing else: a day
-    // and a week are the same length in both, so the other three frequencies
-    // never ask.
-    let lunar = matches!(rule.calendar, RecurrenceCalendar::Lunar);
+/// [`next_date`] asks for positions 0, 1, 2, … in order and never looks back, so
+/// "the position before this one" is always the last thing the cursor produced.
+/// The frequencies that are a formula on the position keep nothing here.
+struct Cursor {
+    /// The anchor read on the lunar calendar, computed once before the walk and
+    /// carried so every lunar position reads it from here rather than converting
+    /// the civil anchor again. `None` unless the rule counts in lunar months.
+    lunar_anchor: Option<LunarDate>,
+    /// The civil date of the last working-day position; the next is `interval`
+    /// working days on from it.
+    workday: Option<CivilDate>,
+    /// The last lunar month a monthly rule produced; the next is `interval` lunar
+    /// months on from it.
+    lunar_month: Option<LunarMonth>,
+}
 
-    let date = match rule.frequency {
-        RecurrenceFrequency::Daily => Some(add_days(anchor, position * interval)),
-        RecurrenceFrequency::Weekly => {
-            // The positions run through the named days of one week before moving
-            // on, so the interval counts weeks and not occurrences: "every other
-            // week on Monday and Friday" must skip a whole week, not one day.
-            let named = weekdays.len() as i64;
-            let monday = add_days(anchor, -weekday_index(anchor));
-            let week = position / named;
-            let day = weekdays[(position % named) as usize];
-            Some(add_days(monday, week * interval * 7 + day))
-        }
-        RecurrenceFrequency::Monthly if lunar => {
-            return lunar_month_candidate(rule, anchor, position * interval)
-        }
-        RecurrenceFrequency::Yearly if lunar => {
-            return lunar_year_candidate(anchor, position * interval)
-        }
-        RecurrenceFrequency::Monthly => {
-            let (year, month) = add_months(anchor.year, anchor.month, position * interval);
-            let day = if rule.on_last_day {
-                days_in_month(year, month)
-            } else {
-                // No day named means the anchor's own day of the month, the same
-                // reading the export leaves to `DTSTART`.
-                rule.month_day.unwrap_or(anchor.day)
-            };
-            day_of(year, month, day)
-        }
-        RecurrenceFrequency::Yearly => {
-            let (year, month) = add_months(anchor.year, anchor.month, position * interval * 12);
-            day_of(year, month, anchor.day)
-        }
-        // Counted in working days, not in days: "every second working day" from a
-        // Thursday is the following Monday.
-        RecurrenceFrequency::Workday => Some(working_day_after(anchor, position * interval)),
-    };
+impl Cursor {
+    /// The date at `position` of the rule's own counting, or `None` when that
+    /// position names a day the calendar does not have.
+    ///
+    /// Position 0 is where the rule starts counting, which is the anchor for every
+    /// frequency except a monthly or weekly rule that names days of its own — there
+    /// it is the first named day of the anchor's own month or week, which may fall
+    /// before the anchor. The caller filters those out; generating them keeps the
+    /// positions evenly spaced, which is what makes an interval mean the same thing
+    /// in every frequency.
+    ///
+    /// `Ok(None)` says "this position exists but the calendar has no such day",
+    /// which the caller steps past. `Err` says "the calendar does not reach this
+    /// position at all", which it cannot: the caller decides from what it was asking
+    /// whether that ends the series or refuses it.
+    ///
+    /// The three frequencies that are a formula on the position compute it here and
+    /// keep no state; the two that count step from the last position the cursor
+    /// holds — [`Cursor::workday_step`] and [`Cursor::lunar_month_step`].
+    fn candidate(
+        &mut self,
+        rule: &RecurrenceRule,
+        anchor: CivilDate,
+        weekdays: &[i64],
+        position: u64,
+    ) -> Result<Option<CivilDate>, RecurrenceError> {
+        let interval = i64::from(rule.interval);
+        let position = position as i64;
+        let steps = position * interval;
+        // The calendar decides what a month and a year are, and nothing else: a day
+        // and a week are the same length in both, so the other three frequencies
+        // never ask.
+        let lunar = matches!(rule.calendar, RecurrenceCalendar::Lunar);
 
-    Ok(date)
+        let date = match rule.frequency {
+            RecurrenceFrequency::Daily => Some(add_days(anchor, steps)),
+            RecurrenceFrequency::Weekly => {
+                // The positions run through the named days of one week before moving
+                // on, so the interval counts weeks and not occurrences: "every other
+                // week on Monday and Friday" must skip a whole week, not one day.
+                let named = weekdays.len() as i64;
+                let monday = add_days(anchor, -weekday_index(anchor));
+                let week = position / named;
+                let day = weekdays[(position % named) as usize];
+                Some(add_days(monday, week * interval * 7 + day))
+            }
+            RecurrenceFrequency::Monthly if lunar => return self.lunar_month_step(rule, interval),
+            RecurrenceFrequency::Yearly if lunar => return self.lunar_year_at(steps),
+            RecurrenceFrequency::Monthly => {
+                let (year, month) = add_months(anchor.year, anchor.month, steps);
+                let day = if rule.on_last_day {
+                    days_in_month(year, month)
+                } else {
+                    // No day named means the anchor's own day of the month, the same
+                    // reading the export leaves to `DTSTART`.
+                    rule.month_day.unwrap_or(anchor.day)
+                };
+                day_of(year, month, day)
+            }
+            RecurrenceFrequency::Yearly => {
+                let (year, month) = add_months(anchor.year, anchor.month, steps * 12);
+                day_of(year, month, anchor.day)
+            }
+            // Counted in working days, not in days: "every second working day" from a
+            // Thursday is the following Monday.
+            RecurrenceFrequency::Workday => Some(self.workday_step(anchor, interval)),
+        };
+
+        Ok(date)
+    }
+
+    /// The next working-day position: the anchor at position 0, then `interval`
+    /// working days on from the last one answered.
+    ///
+    /// [`working_day_after`] composes — advancing `a` working days and then `b`
+    /// lands where advancing `a + b` does, because each is a plain forward walk —
+    /// so stepping `interval` from the previous answer is the very date
+    /// `working_day_after(anchor, position * interval)` gives, reached in `interval`
+    /// steps rather than in `position * interval`. That is what turns a far anchor
+    /// from a per-position recount into a constant step.
+    fn workday_step(&mut self, anchor: CivilDate, interval: i64) -> CivilDate {
+        let date = match self.workday {
+            Some(previous) => working_day_after(previous, interval),
+            None => anchor,
+        };
+        self.workday = Some(date);
+        date
+    }
+
+    /// A monthly rule counted in lunar months, stepped `interval` months on from
+    /// the last rather than counted from the anchor every time.
+    ///
+    /// Every field is read the way the Gregorian branch reads it, on the calendar
+    /// the rule names: `on_last_day` is the twenty-ninth or the thirtieth as that
+    /// month happens to run, no day named means the anchor's own day, and a day the
+    /// month is too short for is skipped rather than pulled back — the thirtieth of
+    /// a 29-day month is this calendar's 31 February. Leap months are months:
+    /// "every month" lands in one when it comes round.
+    ///
+    /// The month is kept whether or not the day exists in it, because a month too
+    /// short for the day is a skipped position and not the end of the walk — the
+    /// next position still steps from this month. [`lunar::month_after`] composes
+    /// over the supported range the same way [`working_day_after`] does.
+    fn lunar_month_step(
+        &mut self,
+        rule: &RecurrenceRule,
+        interval: i64,
+    ) -> Result<Option<CivilDate>, RecurrenceError> {
+        let anchor = self.lunar_anchor();
+        let month = match self.lunar_month {
+            Some(previous) => lunar::month_after(month_start(previous), interval),
+            None => lunar::month_after(anchor, 0),
+        }
+        .ok_or(RecurrenceError::LunarOutOfRange)?;
+        self.lunar_month = Some(month);
+
+        let day = if rule.on_last_day {
+            month.length
+        } else {
+            rule.month_day.unwrap_or(anchor.day)
+        };
+        Ok(lunar::day_in(&month, day))
+    }
+
+    /// A yearly rule counted in lunar years — the lunar birthday.
+    ///
+    /// The occurrence keeps the anchor's month, its day, and whether that month was
+    /// a leap one. A year without that leap month is skipped, exactly as a common
+    /// year is skipped by a rule anchored on 29 February: most years have no leap
+    /// fourth month, and moving the occurrence into the ordinary fourth month would
+    /// be a different date from the one the user chose.
+    ///
+    /// A direct reading of the target year — no walk — so unlike the two stepped
+    /// frequencies it needs only the anchor the cursor already holds. A year past
+    /// the end of the calendar is `Err`, which the caller reads by what it was
+    /// asking: some leap months do not come round again before the calendar ends,
+    /// and a rule anchored in one ends its series the way "the 31st, every February"
+    /// does, in [`next_date`], rather than reporting the end of the calendar.
+    fn lunar_year_at(&self, steps: i64) -> Result<Option<CivilDate>, RecurrenceError> {
+        let anchor = self.lunar_anchor();
+        let year = anchor.year + steps;
+        if !lunar::covers_year(year) {
+            return Err(RecurrenceError::LunarOutOfRange);
+        }
+
+        // Inside the supported years a missing month is a real absence rather than
+        // missing data, so it is a skipped position and not an error.
+        Ok(lunar::month_of_year(year, anchor.month, anchor.leap)
+            .and_then(|month| lunar::day_in(&month, anchor.day)))
+    }
+
+    /// The anchor read on the lunar calendar. Present whenever a lunar-counting
+    /// method runs, because [`next_date`] reads and refuses it before the walk.
+    fn lunar_anchor(&self) -> LunarDate {
+        self.lunar_anchor
+            .expect("a lunar rule reads its anchor before the walk begins")
+    }
+}
+
+/// A lunar month as a date the month counting can locate it by; only the year,
+/// month and leap are read, so the day is a placeholder.
+fn month_start(month: LunarMonth) -> LunarDate {
+    LunarDate {
+        year: month.year,
+        month: month.month,
+        leap: month.leap,
+        day: 1,
+    }
 }
 
 /// The day of the month, or nothing when the month is too short for it.
 fn day_of(year: i64, month: u32, day: u32) -> Option<CivilDate> {
     (day <= days_in_month(year, month)).then_some(CivilDate { year, month, day })
-}
-
-/// A monthly rule counted in lunar months.
-///
-/// Every field is read the way the Gregorian branch reads it, on the calendar
-/// the rule names: `on_last_day` is the twenty-ninth or the thirtieth as that
-/// month happens to run, no day named means the anchor's own day, and a day the
-/// month is too short for is skipped rather than pulled back — the thirtieth of
-/// a 29-day month is this calendar's 31 February. Leap months are months: "every
-/// month" lands in one when it comes round.
-fn lunar_month_candidate(
-    rule: &RecurrenceRule,
-    anchor: CivilDate,
-    steps: i64,
-) -> Result<Option<CivilDate>, RecurrenceError> {
-    let anchor = lunar_anchor(anchor)?;
-    let month = lunar::month_after(anchor, steps).ok_or(RecurrenceError::LunarOutOfRange)?;
-    let day = if rule.on_last_day {
-        month.length
-    } else {
-        rule.month_day.unwrap_or(anchor.day)
-    };
-
-    Ok(lunar::day_in(&month, day))
-}
-
-/// A yearly rule counted in lunar years — the lunar birthday.
-///
-/// The occurrence keeps the anchor's month, its day, and whether that month was
-/// a leap one. A year without that leap month is skipped, exactly as a common
-/// year is skipped by a rule anchored on 29 February: most years have no leap
-/// fourth month, and moving the occurrence into the ordinary fourth month would
-/// be a different date from the one the user chose.
-///
-/// Some leap months do not come round again at all before the calendar ends — a
-/// leap tenth month has not repeated since 1984 — and a rule anchored in one
-/// ends its series the way "the 31st, every February" does, in [`next_date`],
-/// rather than reporting the end of the calendar. Whether a rule form should let
-/// a user pick a position with that property, and what to tell them if it does,
-/// is a question about the form rather than about the engine.
-fn lunar_year_candidate(
-    anchor: CivilDate,
-    steps: i64,
-) -> Result<Option<CivilDate>, RecurrenceError> {
-    let anchor = lunar_anchor(anchor)?;
-    let year = anchor.year + steps;
-    if !lunar::covers_year(year) {
-        return Err(RecurrenceError::LunarOutOfRange);
-    }
-
-    // Inside the supported years a missing month is a real absence rather than
-    // missing data, so it is a skipped position and not an error.
-    Ok(lunar::month_of_year(year, anchor.month, anchor.leap)
-        .and_then(|month| lunar::day_in(&month, anchor.day)))
 }
 
 /// The anchor read on the lunar calendar, which is where a lunar rule counts
@@ -1251,6 +1328,50 @@ mod tests {
             series(&rule(RecurrenceFrequency::Workday), "2027-10-01", 2),
             ["2027-10-01", "2027-10-04"]
         );
+    }
+
+    #[test]
+    fn a_long_working_day_walk_holds_its_footing_across_many_positions() {
+        // One `next_occurrence` call now carries a cursor across all its
+        // positions instead of recounting from the anchor at each; a long walk
+        // is where a dropped or repeated step would show. Past 2026 no
+        // arrangement is published, so a working day is Monday to Friday: every
+        // gap is one day inside a week or three across a weekend, and never a
+        // weekend day itself.
+        let dates = series(&rule(RecurrenceFrequency::Workday), "2027-01-01", 300);
+        assert_eq!(dates.len(), 300);
+        assert_eq!(dates[0], "2027-01-01");
+        for pair in dates.windows(2) {
+            let earlier = parse_date(&pair[0]).expect("a readable date");
+            let later = parse_date(&pair[1]).expect("a readable date");
+            let gap = crate::civil::days_from_civil(later) - crate::civil::days_from_civil(earlier);
+            assert!(gap == 1 || gap == 3, "{pair:?} are {gap} days apart");
+            assert!(
+                crate::civil::weekday_index(later) < 5,
+                "{} is a weekend",
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_lunar_monthly_walk_stays_on_its_day_across_many_positions() {
+        // The lunar monthly cursor steps one month on from the last rather than
+        // recounting the whole way from the anchor; over a long walk every
+        // landing must still read back as the first day of its lunar month, and
+        // the civil gaps must be the 29 or 30 days a lunar month runs — a lost or
+        // doubled month would break one or the other.
+        let dates = series(&lunar_rule(RecurrenceFrequency::Monthly), "2026-02-17", 120);
+        assert_eq!(dates.len(), 120);
+        for date in &dates {
+            assert_eq!(reading(date).2, 1, "{date} is not the first of its lunar month");
+        }
+        for pair in dates.windows(2) {
+            let earlier = parse_date(&pair[0]).expect("a readable date");
+            let later = parse_date(&pair[1]).expect("a readable date");
+            let gap = crate::civil::days_from_civil(later) - crate::civil::days_from_civil(earlier);
+            assert!(gap == 29 || gap == 30, "{pair:?} are {gap} days apart");
+        }
     }
 
     #[test]

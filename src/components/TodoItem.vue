@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Check, Copy, SlidersHorizontal, Trash2 } from "lucide-vue-next";
+import { Check, Copy, Repeat, SlidersHorizontal, Trash2 } from "lucide-vue-next";
 import Button from "@/components/ui/button/Button.vue";
 import TodoFields, {
   createEmptyDraft,
@@ -12,6 +12,7 @@ import TodoFields, {
 } from "@/components/TodoFields.vue";
 import { clearFormAlert } from "@/lib/form-alert";
 import { dueDateTone, formatDueDate, isNotStarted, TONE_LABEL_CLASS } from "@/lib/dueDate";
+import { recurrenceLabel } from "@/lib/recurrence";
 import { useTodoStore } from "@/stores/todos";
 import type { Todo } from "@/types/todo";
 
@@ -232,10 +233,20 @@ function cancel(): void {
           {{ todo.title }}
         </button>
         <!--
-          The badge row shows on a start date too, not only a due date: a start
-          date the user cannot see anywhere reads as a field that did nothing.
+          The badge row shows on a start date or a repeat rule too, not only a
+          due date: a field the user set that shows up nowhere reads as a field
+          that did nothing. A repeat-only task with no dates still earns the row
+          for its recurrence pill.
+
+          Order: due (most actionable) → repeat (a stable property) → not-started
+          (least often present). All three ride one `flex-wrap` line inside the
+          middle column, so a narrow screen folds them under the title rather than
+          scrolling the row sideways.
         -->
-        <p v-if="todo.dueDate || notStarted" class="mb-0 mt-1 flex flex-wrap items-center gap-2">
+        <p
+          v-if="todo.dueDate || todo.recurrence || notStarted"
+          class="mb-0 mt-1 flex flex-wrap items-center gap-2"
+        >
           <span
             v-if="todo.dueDate"
             class="inline-block rounded-md px-1.5 py-0.5 text-xs font-medium"
@@ -243,6 +254,30 @@ function cancel(): void {
           >
             {{ formatDueDate(todo.dueDate) }}
             <span v-if="todo.reminderAt"> · 已设提醒</span>
+          </span>
+          <!--
+            Repeat pill: a `Repeat` icon is the one signal the date badges do not
+            carry, so a reader tells "this repeats" from "this is a date" at a
+            glance; the words carry the same meaning, so it never leans on the icon
+            alone. Neutral slate, the same tone as the not-started badge and never
+            the urgency reds — a repeat is a stable property, not a deadline. The
+            two colour branches are mutually exclusive and weigh the same, written
+            here rather than in a `.ts` table so UnoCSS scans and generates the
+            `dark:` classes (the `dueDate.ts` trap). Non-interactive: no focus, no
+            Tab stop, so its size is not a touch target.
+          -->
+          <span
+            v-if="todo.recurrence"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium"
+            :class="
+              completed
+                ? 'text-slate-400 dark:text-slate-500'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            "
+          >
+            <Repeat :size="14" aria-hidden="true" />
+            <span class="sr-only">重复规则：</span>
+            {{ recurrenceLabel(todo.recurrence) }}
           </span>
           <span
             v-if="notStarted"

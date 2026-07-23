@@ -1,10 +1,11 @@
 import { computed, ref, toRaw } from "vue";
 import { defineStore } from "pinia";
-import type { Todo } from "@/types/todo";
+import type { RecurrenceRule, Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import type { PageAlert } from "@/lib/page-alert";
 import { daysSinceLocalDay, isOverdue, todayLocalDay } from "@/lib/dueDate";
 import { normalizeNotes, normalizeTitle } from "@/lib/todo-normalize";
+import { daysBetween, nextOccurrence, shiftInstant, shiftLocalDate } from "@/lib/recurrence";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { buildDeleteOperation, buildUpsertOperation, recordOperation } from "@/lib/sync-engine";
@@ -58,6 +59,9 @@ type FieldChange = Pick<
   | "startsAt"
   | "endsAt"
   | "estimatedMinutes"
+  // Carried so a recurring task advancing past an occurrence can write its
+  // counted-down rule; ordinary edits do not touch it (its editor is elsewhere).
+  | "recurrence"
 >;
 
 /**
@@ -68,6 +72,13 @@ type FieldChange = Pick<
  * that, and now hold this" — which is what lets one apply path serve the two of
  * them and their undos. A deletion cannot be said that way (there is no todo
  * left to hold anything), so it carries the whole row and the place it sat.
+ *
+ * `batch` is one user action that touched more than one row and has to be taken
+ * back as a whole: completing a recurring task both completes it and generates
+ * its successor, and a single Ctrl+Z must undo both — the row returns to open and
+ * the new row disappears. Its parts are held in the order they were done and
+ * inverted in reverse (see `inverse`), so a batch never restores a row before the
+ * one it depended on.
  */
 type HistoryEntry =
   | {
@@ -77,7 +88,8 @@ type HistoryEntry =
       readonly after: FieldChange;
     }
   | { readonly kind: "delete"; readonly todo: Todo; readonly index: number }
-  | { readonly kind: "insert"; readonly todo: Todo; readonly index: number };
+  | { readonly kind: "insert"; readonly todo: Todo; readonly index: number }
+  | { readonly kind: "batch"; readonly entries: readonly HistoryEntry[] };
 
 /**
  * How many actions can be taken back.
@@ -92,6 +104,14 @@ type HistoryEntry =
  */
 const UNDO_DEPTH_LIMIT = 50;
 
+/**
+ * How many occurrences one overdue recurring task may be stepped forward in a
+ * single catch-up. A guard on the walk, not a real limit — thousands of daily
+ * occurrences is over a decade — so a task closed for an implausibly long time is
+ * left partly advanced rather than looping the engine without end.
+ */
+const MAX_RECURRENCE_CATCHUP = 4000;
+
 /** Undoing a change means writing back what the fields held before it. */
 function inverse(entry: HistoryEntry): HistoryEntry {
   switch (entry.kind) {
@@ -101,6 +121,11 @@ function inverse(entry: HistoryEntry): HistoryEntry {
       return { kind: "insert", todo: entry.todo, index: entry.index };
     case "insert":
       return { kind: "delete", todo: entry.todo, index: entry.index };
+    case "batch":
+      // Undo each part in the reverse of the order they were done, so the
+      // generated successor is removed before the completion it came from is
+      // taken back.
+      return { kind: "batch", entries: entry.entries.map(inverse).reverse() };
   }
 }
 
@@ -204,6 +229,14 @@ export const useTodoStore = defineStore("todos", () => {
    */
   const undoStack: HistoryEntry[] = [];
   const redoStack: HistoryEntry[] = [];
+
+  /**
+   * Ids whose recurring completion is mid-flight. Completing a recurring task
+   * asks the engine for its next date before it applies anything, and a second
+   * click in that window must not start a second completion — one completion must
+   * generate exactly one successor.
+   */
+  const completingRecurring = new Set<string>();
 
   /**
    * Both lines are `standing`: nothing but the condition itself clears them,
@@ -432,6 +465,16 @@ export const useTodoStore = defineStore("todos", () => {
         return deleteTodo(entry.todo.id) !== null;
       case "insert":
         return insertTodo(entry.todo, entry.index);
+      case "batch": {
+        // Apply every part; the batch counts as having acted if any part did, so
+        // a partly-stale group — its successor already deleted on another device
+        // — still takes the completion back rather than reading as a dead undo.
+        let acted = false;
+        for (const part of entry.entries) {
+          if (applyEntry(part)) acted = true;
+        }
+        return acted;
+      }
     }
   }
 
@@ -549,6 +592,18 @@ export const useTodoStore = defineStore("todos", () => {
     const todo = items.value.find((item) => item.id === id);
     if (!todo) return;
 
+    // Completing a recurring task that has a due date is the one toggle that also
+    // generates: it asks the engine for the next date, then applies the
+    // completion and the new instance together as a single undoable unit. A
+    // recurring task with no due date has no date to advance, so it completes
+    // like any other; re-opening any task is likewise the plain path below.
+    if (todo.status === "open" && todo.recurrence && todo.dueDate) {
+      if (completingRecurring.has(id)) return;
+      completingRecurring.add(id);
+      void completeRecurring({ ...toRaw(todo) }).finally(() => completingRecurring.delete(id));
+      return;
+    }
+
     const completing = todo.status === "open";
     // The instant is kept on both sides, so undoing a completion puts back the
     // time it was originally completed at rather than inventing a new one.
@@ -560,6 +615,54 @@ export const useTodoStore = defineStore("todos", () => {
 
     if (!applyChange(id, after)) return;
     recordHistory({ kind: "change", id, before, after });
+  }
+
+  /**
+   * Completes a recurring instance and generates the next one as a single undo
+   * unit.
+   *
+   * The next date comes from the engine — the app's one reading of "when does
+   * this repeat" — counted from this instance's own due date, so completing it
+   * late still lands on the schedule the calendar export expands rather than
+   * floating from the moment it was checked off. `null` means the series has
+   * ended (past its end date or count) or this runtime has no engine to ask
+   * (browser dev): the task is completed with no successor.
+   *
+   * The completion is applied only after the next date is in hand, so the two
+   * halves land together with no window in which the row is completed but its
+   * successor is missing, and the guard in `toggle` keeps a second click from
+   * generating a second successor while this awaits. The successor sits right
+   * after the completed row and the pair is filed as one batch, so one Ctrl+Z
+   * returns the row to open and removes the new row together.
+   */
+  async function completeRecurring(source: Todo): Promise<void> {
+    const before: FieldChange = { status: source.status, completedAt: source.completedAt };
+    const after: FieldChange = { status: "completed", completedAt: new Date().toISOString() };
+
+    const nextDate =
+      source.recurrence && source.dueDate
+        ? await nextOccurrence(source.recurrence, source.dueDate, source.dueDate)
+        : null;
+
+    if (!applyChange(source.id, after)) return;
+    const completeEntry: HistoryEntry = { kind: "change", id: source.id, before, after };
+
+    if (nextDate === null) {
+      recordHistory(completeEntry);
+      return;
+    }
+
+    const index = items.value.findIndex((item) => item.id === source.id);
+    const successor = buildNextInstance(source, nextDate);
+    if (index < 0 || !insertTodo(successor, index + 1)) {
+      recordHistory(completeEntry);
+      return;
+    }
+
+    recordHistory({
+      kind: "batch",
+      entries: [completeEntry, { kind: "insert", todo: successor, index: index + 1 }],
+    });
   }
 
   function remove(id: string) {
@@ -629,6 +732,58 @@ export const useTodoStore = defineStore("todos", () => {
     // forward — see `recordHistory`.
     redoStack.length = 0;
     return copy.id;
+  }
+
+  /**
+   * The next instance of a recurring task: the same task, one step further along
+   * its schedule.
+   *
+   * "A step further" is what tells this apart from `duplicate` ("another one,
+   * now"): the completion state resets, a fresh id is minted, and every other
+   * date the task carries moves by the same number of days the due date moved, so
+   * its reminder and timed block keep their wall-clock time on the new date rather
+   * than staying on the one that has passed. The rule carries on with one
+   * occurrence spent — a counting rule ticks down — and `dependsOn` is dropped for
+   * the same reason `duplicate` drops it: a dependency is this row's place in the
+   * graph, not part of what the task says. Every field of the contract is named,
+   * so a field added later and forgotten here is a compile error.
+   */
+  function buildNextInstance(source: Todo, nextDate: string): Todo {
+    const shift = source.dueDate ? daysBetween(source.dueDate, nextDate) : 0;
+    return {
+      id: newId(),
+      title: source.title,
+      status: "open",
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+      archivedAt: null,
+      dueDate: nextDate,
+      reminderAt: shiftInstant(source.reminderAt ?? null, shift),
+      notes: source.notes ?? null,
+      startDate: shiftLocalDate(source.startDate ?? null, shift),
+      startsAt: shiftInstant(source.startsAt ?? null, shift),
+      endsAt: shiftInstant(source.endsAt ?? null, shift),
+      estimatedMinutes: source.estimatedMinutes ?? null,
+      recurrence: source.recurrence ? decrementedCount(source.recurrence) : null,
+      listId: source.listId ?? null,
+      important: source.important ?? null,
+      urgent: source.urgent ?? null,
+      sortOrder: null,
+      tagIds: [...source.tagIds],
+      subtasks: source.subtasks.map((subtask) => ({ ...subtask, id: newId(), done: false })),
+      attachments: source.attachments.map((attachment) => ({ ...attachment, id: newId() })),
+      dependsOn: [],
+    };
+  }
+
+  /**
+   * A rule with one occurrence spent: a running count ticks down, everything else
+   * stays. Only reached once the engine has confirmed a successor exists, so a
+   * present count is at least two here and never ticks to the zero the contract
+   * refuses.
+   */
+  function decrementedCount(rule: RecurrenceRule): RecurrenceRule {
+    return rule.count == null ? rule : { ...rule, count: rule.count - 1 };
   }
 
   /**
@@ -718,6 +873,11 @@ export const useTodoStore = defineStore("todos", () => {
         continue;
       }
 
+      // A recurring task does not roll to today: it advances to its next
+      // scheduled occurrence, which is the engine's job in `advanceRecurrences`.
+      // Excluded here, whatever the setting, so the two rules never both move it
+      // — a roll to today would put it on a date its own schedule never names.
+      if (todo.recurrence) continue;
       if (!options.rolloverOverdue) continue;
       // A task with no deadline cannot be overdue, and inventing one for it
       // would overwrite a deliberate choice with today's date.
@@ -731,6 +891,96 @@ export const useTodoStore = defineStore("todos", () => {
     if (archived > 0 || rolledOver > 0) {
       writeDiagnostic("info", "Day-start rules applied", { archived, rolledOver });
     }
+  }
+
+  /**
+   * Advances every overdue recurring task to its next scheduled occurrence — the
+   * "到期" half of instance generation, and the recurrence-aware counterpart to
+   * the roll-to-today `runDayStart` does for one-off tasks.
+   *
+   * Always on, not gated by the rollover setting: that setting is about rewriting
+   * a deadline the user set by hand, while a recurring task's date is the rule's
+   * to decide, so advancing to the next occurrence is the rule doing its job
+   * rather than a preference. Runs at the same moments as `runDayStart` (app
+   * start, each midnight, return to foreground); once a task is caught up it is no
+   * longer overdue and later passes skip it. Async because the next date is the
+   * engine's to give — a runtime without it (browser dev) advances nothing.
+   */
+  async function advanceRecurrences(options: { skipId: string | null }): Promise<void> {
+    // Take the ids first: the loop awaits, so the list must not be walked live.
+    const overdue = items.value
+      .filter(
+        (todo) =>
+          todo.id !== options.skipId &&
+          !todo.archivedAt &&
+          todo.status === "open" &&
+          Boolean(todo.recurrence) &&
+          isOverdue(todo.dueDate, false) &&
+          // A completion in flight already owns this id's schedule: it snapshotted
+          // the due date before awaiting the engine and will build the successor
+          // from it. Advancing the row here in that window would move the anchor
+          // out from under that snapshot, so the successor would land on an
+          // occurrence this path just stepped past and its count would be spent
+          // twice. The completion path advances the row on its own, so the due
+          // path stands down while it holds the id.
+          !completingRecurring.has(todo.id),
+      )
+      .map((todo) => todo.id);
+
+    for (const id of overdue) {
+      // Re-checked each step, not only at collection: a completion may begin
+      // while this loop awaits an earlier id, and that id must be stood down too.
+      // The id is not lost — the completion advances it, and a completion that
+      // fails leaves the row overdue for the next pass to pick up.
+      if (completingRecurring.has(id)) continue;
+      await advanceOverdueRecurring(id);
+    }
+  }
+
+  /**
+   * Steps one overdue recurring task forward to the first occurrence on or after
+   * today, then writes the move as one change.
+   *
+   * One occurrence at a time so a counting rule spends exactly one `count` per
+   * occurrence passed; the loop stops when the task is no longer overdue or the
+   * series runs out (the engine answering `null`, leaving the last occurrence in
+   * place). The other dates move together by the days the due date moved, the same
+   * as a generated successor, and the rule is written back only when it actually
+   * changed — a counting rule — so an ordinary rule's advance is not sync noise.
+   * This goes through `applyChange`, below the undo stack, because a background
+   * rule the user did not perform is not theirs to take back (as with the
+   * day-start rules).
+   */
+  async function advanceOverdueRecurring(id: string): Promise<void> {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo?.recurrence || !todo.dueDate) return;
+
+    const today = todayLocalDay();
+    const originalDue = todo.dueDate;
+    let rule = todo.recurrence;
+    let due = todo.dueDate;
+    let steps = 0;
+
+    while (due < today && steps < MAX_RECURRENCE_CATCHUP) {
+      const next = await nextOccurrence(rule, due, due);
+      if (next === null) break;
+      due = next;
+      rule = decrementedCount(rule);
+      steps += 1;
+    }
+
+    if (due === originalDue) return;
+
+    const shift = daysBetween(originalDue, due);
+    const change: FieldChange = { dueDate: due };
+    if (todo.startDate) change.startDate = shiftLocalDate(todo.startDate, shift);
+    if (todo.reminderAt) change.reminderAt = shiftInstant(todo.reminderAt, shift);
+    if (todo.startsAt) change.startsAt = shiftInstant(todo.startsAt, shift);
+    if (todo.endsAt) change.endsAt = shiftInstant(todo.endsAt, shift);
+    // The counted-down rule only when it moved; an infinite rule is unchanged and
+    // sending it would be recurrence on the wire for no reason.
+    if (rule !== todo.recurrence) change.recurrence = rule;
+    applyChange(id, change);
   }
 
   /**
@@ -842,6 +1092,7 @@ export const useTodoStore = defineStore("todos", () => {
     duplicate,
     unarchive,
     runDayStart,
+    advanceRecurrences,
     undo,
     redo,
     applyRemoteUpsert,

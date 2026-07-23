@@ -47,6 +47,20 @@ export const commands = {
 	 *  repetition early.
 	 */
 	exportCalendar: (todos: Todo_Deserialize[], zoneOffsetMinutes: number) => typedError<CalendarExport, string>(__TAURI_INVOKE("export_calendar", { todos, zoneOffsetMinutes })),
+	/**
+	 *  The next date a repeat rule lands on strictly after `after`, or `null` when
+	 *  the series has ended.
+	 * 
+	 *  The rule engine is a pure `todo-domain` function and the app's single source
+	 *  of "when does this repeat"; the view layer reaches it through this command to
+	 *  generate a recurring task's next instance rather than reimplementing the rule
+	 *  in TypeScript, which would be a second interpretation waiting to disagree with
+	 *  the exported calendar. Only the date is returned: the engine's working-day
+	 *  caveat is a display concern the list does not carry, and generating the next
+	 *  instance needs the date alone. `anchor` and `after` are local `YYYY-MM-DD`
+	 *  dates, the shape a due date is stored in.
+	 */
+	nextOccurrence: (rule: RecurrenceRule_Deserialize, anchor: string, after: string) => typedError<string | null, string>(__TAURI_INVOKE("next_occurrence", { rule, anchor, after })),
 };
 
 /* Constants */
