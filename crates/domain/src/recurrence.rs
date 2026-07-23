@@ -11,16 +11,20 @@
 //! so nothing here needs a time zone and no daylight-saving change can move an
 //! occurrence to another date.
 //!
-//! What is deliberately not here:
+//! Two of the fields are read somewhere else, because they are not arithmetic:
 //!
-//! * *Generating* instances — creating the next task, marking a list row as
-//!   repeating — is the caller's job. This module only answers "when".
-//! * The lunar calendar. A lunar rule is refused rather than answered in the
-//!   wrong calendar, exactly as the calendar export drops the `RRULE` it cannot
-//!   say honestly.
-//! * Public holidays. A working day is the contract's own words "holiday-aware
-//!   rather than Monday to Friday"; until the holiday data exists, [`is_working_day`]
-//!   is Monday to Friday and is the single place that will read it.
+//! * A lunar rule counts its months and years on the calendar in
+//!   [`crate::lunar`], which is computed from the sky rather than tabulated. The
+//!   other frequencies are the same in both calendars — a day is a day and a
+//!   week is a week — so only "monthly" and "yearly" change meaning.
+//! * A working day is the contract's own words "holiday-aware rather than Monday
+//!   to Friday". [`is_working_day`] is the single place that reads
+//!   [`crate::holidays`], and every frequency that counts working days follows
+//!   from it.
+//!
+//! What is deliberately not here: *generating* instances — creating the next
+//! task, marking a list row as repeating — is the caller's job. This module only
+//! answers "when".
 //!
 //! The reading of every field agrees with the `RRULE` mapping in [`crate::ics`],
 //! so that what the app shows and what an exported file expands to are the same
@@ -39,6 +43,8 @@ use todo_contracts::{
 use crate::civil::{
     add_days, add_months, days_in_month, format_iso_date, parse_date, weekday_index, CivilDate,
 };
+use crate::holidays;
+use crate::lunar::{self, LunarDate};
 
 /// How many positions a rule may name that the calendar does not have before the
 /// search gives up.
@@ -58,9 +64,10 @@ pub enum RecurrenceError {
     UnreadableDate,
     /// The rule itself is not a usable combination; the contract says which.
     UnusableRule(ContractValidationError),
-    /// A lunar rule. Answering it in the Gregorian calendar would put the
-    /// occurrences on the wrong days, which is worse than not answering.
-    UnsupportedCalendar,
+    /// A lunar rule reaching a year [`crate::lunar`] does not answer for.
+    /// Guessing at it would put the occurrences a whole month out, which is
+    /// worse than not answering.
+    LunarOutOfRange,
 }
 
 impl std::fmt::Display for RecurrenceError {
@@ -70,14 +77,40 @@ impl std::fmt::Display for RecurrenceError {
                 formatter.write_str("a repeat rule is counted from dates written as YYYY-MM-DD")
             }
             Self::UnusableRule(error) => write!(formatter, "{error}"),
-            Self::UnsupportedCalendar => {
-                formatter.write_str("the lunar calendar is not supported yet")
-            }
+            Self::LunarOutOfRange => write!(
+                formatter,
+                "the lunar calendar is only known from {} to {}",
+                lunar::FIRST_YEAR,
+                lunar::LAST_YEAR
+            ),
         }
     }
 }
 
 impl std::error::Error for RecurrenceError {}
+
+/// One occurrence of a repeat rule.
+///
+/// A date and one thing the caller has to be told about it. The engine answers
+/// for years the published holiday arrangement does not reach by reading them as
+/// Monday to Friday (see [`is_working_day`]), which is the right trade only if
+/// whoever shows the answer can say so; a bare date cannot be shown with that
+/// caveat because nothing in it carries the caveat. Here it travels with the
+/// date, and a caller cannot read one without meeting the other.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Occurrence {
+    /// The civil date it falls on, `YYYY-MM-DD`.
+    pub date: String,
+    /// Whether the answer counted working days through a year no published
+    /// arrangement covers, and read those days as Monday to Friday.
+    ///
+    /// Only a working-day rule can set it — no other frequency reads the
+    /// arrangement at all. When it is set the date is still the engine's best
+    /// answer, but it is arithmetic rather than data: whoever shows it should
+    /// say which years the app is speaking for, and
+    /// [`crate::holidays::coverage`] is where those years come from.
+    pub assumed_monday_to_friday: bool,
+}
 
 /// When the rule happens next, strictly after `after`.
 ///
@@ -86,8 +119,11 @@ impl std::error::Error for RecurrenceError {}
 /// (a working-day rule anchored on a Saturday), which is how RFC 5545 reads
 /// `DTSTART` and therefore how the exported file expands.
 ///
-/// `Ok(None)` means the series has ended: it ran past the rule's end date, or it
-/// has already produced as many occurrences as the rule counts.
+/// `Ok(None)` means there is no next occurrence: the series ran past the rule's
+/// end date, or it has already produced as many occurrences as the rule counts,
+/// or the rule names a position the calendar does not bring round again — "the
+/// 31st, every February", and its lunar counterpart, a leap month that does not
+/// come back before the calendar runs out.
 ///
 /// Both dates are `YYYY-MM-DD`. Asking from before the anchor answers with the
 /// anchor, so a caller can walk the whole series by feeding each answer back in
@@ -98,11 +134,36 @@ pub fn next_occurrence(
     rule: &RecurrenceRule,
     anchor: &str,
     after: &str,
-) -> Result<Option<String>, RecurrenceError> {
+) -> Result<Option<Occurrence>, RecurrenceError> {
     let anchor = parse_date(anchor).ok_or(RecurrenceError::UnreadableDate)?;
     let after = parse_date(after).ok_or(RecurrenceError::UnreadableDate)?;
 
-    Ok(next_date(rule, anchor, after)?.map(format_iso_date))
+    Ok(next_date(rule, anchor, after)?.map(|date| Occurrence {
+        assumed_monday_to_friday: counted_past_the_published_years(rule, anchor, date),
+        date: format_iso_date(date),
+    }))
+}
+
+/// Whether the walk to `date` read any day of a year the published arrangement
+/// does not cover.
+///
+/// Only a working-day rule reads the arrangement, and it reads every day between
+/// the anchor and the answer, so the two ends decide it. The table covers a run
+/// of years without holes, which is what lets a pair of years stand for the
+/// whole span.
+fn counted_past_the_published_years(
+    rule: &RecurrenceRule,
+    anchor: CivilDate,
+    date: CivilDate,
+) -> bool {
+    if !matches!(rule.frequency, RecurrenceFrequency::Workday) {
+        return false;
+    }
+
+    match holidays::coverage() {
+        Some((first, last)) => anchor.year < first || date.year > last,
+        None => true,
+    }
 }
 
 /// The body of [`next_occurrence`], in dates rather than strings.
@@ -119,15 +180,21 @@ fn next_date(
     // An interval of zero would make the walk stand still, so the contract's own
     // check is the guard rather than a second opinion about the same rule.
     rule.validate().map_err(RecurrenceError::UnusableRule)?;
-    if matches!(rule.calendar, RecurrenceCalendar::Lunar) {
-        return Err(RecurrenceError::UnsupportedCalendar);
-    }
 
     // An end date that cannot be read is no end date, as in the export: nothing
     // validates the field, and refusing the whole rule over it would stop a
     // repeat the user can still see and correct.
     let until = rule.until.as_deref().and_then(parse_date);
     let weekdays = weekly_days(rule, anchor);
+
+    // A rule counted on the lunar calendar is answered from its anchor read on
+    // that calendar, so an anchor outside the years it knows is refused here,
+    // before the walk. Afterwards the only way the walk can meet that refusal is
+    // by running off the far end, which is a different thing and answered
+    // differently below.
+    if counts_in_lunar_months(rule) {
+        lunar_anchor(anchor)?;
+    }
 
     let mut current = anchor;
     let mut index: u32 = 1;
@@ -138,22 +205,26 @@ fn next_date(
         if until.is_some_and(|end| current > end) {
             return Ok(None);
         }
-        if rule.count.is_some_and(|count| index > count) {
-            return Ok(None);
-        }
         if current > after {
             return Ok(Some(current));
+        }
+        // The occurrence in hand is the last one the rule counts, so there is no
+        // next one to go looking for. Asking anyway is not merely wasted work: a
+        // lunar rule would walk off the end of its calendar and report that
+        // instead of the count it had already spent.
+        if rule.count.is_some_and(|count| index >= count) {
+            return Ok(None);
         }
 
         let next = loop {
             let taken = position;
             position += 1;
             match candidate(rule, anchor, &weekdays, taken) {
-                Some(date) if date > current => break date,
+                Ok(Some(date)) if date > current => break date,
                 // A position the calendar does not have (the 31st of a 30-day
                 // month). RFC 5545 skips it rather than moving it to the 30th,
                 // and it is not an occurrence, so it must not consume a count.
-                None => {
+                Ok(None) => {
                     missing += 1;
                     if missing > MAX_MISSING_POSITIONS {
                         return Ok(None);
@@ -161,7 +232,27 @@ fn next_date(
                 }
                 // A position at or before the one in hand: the days of the
                 // anchor's own week that fall before the anchor.
-                Some(_) => {}
+                Ok(Some(_)) => {}
+                // The walk has reached the end of the lunar calendar. Positions
+                // only run forward, so nothing beyond this one can be earlier,
+                // and whether that is a refusal depends on what was being asked:
+                //
+                // * a rule that ends before the calendar does has simply ended —
+                //   the lunar year past the end begins in a civil year past
+                //   `until`, so no occurrence inside the window is being hidden;
+                // * a rule whose every position since its last occurrence was
+                //   one the calendar does not have (a leap month that never
+                //   comes round again) is the lunar reading of "the 31st, every
+                //   February", which ends the search rather than failing it;
+                // * otherwise the next occurrence is a real day that this module
+                //   cannot compute, and that is the one worth refusing.
+                Err(error) => {
+                    let rule_ends_first = until.is_some_and(|end| end.year <= lunar::LAST_YEAR);
+                    if rule_ends_first || missing > 0 {
+                        return Ok(None);
+                    }
+                    return Err(error);
+                }
             }
         };
 
@@ -180,16 +271,25 @@ fn next_date(
 /// before the anchor. The caller filters those out; generating them keeps the
 /// positions evenly spaced, which is what makes an interval mean the same thing
 /// in every frequency.
+///
+/// `Ok(None)` says "this position exists but the calendar has no such day",
+/// which the caller steps past. `Err` says "the calendar does not reach this
+/// position at all", which it cannot: the caller decides from what it was asking
+/// whether that ends the series or refuses it.
 fn candidate(
     rule: &RecurrenceRule,
     anchor: CivilDate,
     weekdays: &[i64],
     position: u64,
-) -> Option<CivilDate> {
+) -> Result<Option<CivilDate>, RecurrenceError> {
     let interval = i64::from(rule.interval);
     let position = position as i64;
+    // The calendar decides what a month and a year are, and nothing else: a day
+    // and a week are the same length in both, so the other three frequencies
+    // never ask.
+    let lunar = matches!(rule.calendar, RecurrenceCalendar::Lunar);
 
-    match rule.frequency {
+    let date = match rule.frequency {
         RecurrenceFrequency::Daily => Some(add_days(anchor, position * interval)),
         RecurrenceFrequency::Weekly => {
             // The positions run through the named days of one week before moving
@@ -200,6 +300,12 @@ fn candidate(
             let week = position / named;
             let day = weekdays[(position % named) as usize];
             Some(add_days(monday, week * interval * 7 + day))
+        }
+        RecurrenceFrequency::Monthly if lunar => {
+            return lunar_month_candidate(rule, anchor, position * interval)
+        }
+        RecurrenceFrequency::Yearly if lunar => {
+            return lunar_year_candidate(anchor, position * interval)
         }
         RecurrenceFrequency::Monthly => {
             let (year, month) = add_months(anchor.year, anchor.month, position * interval);
@@ -219,12 +325,87 @@ fn candidate(
         // Counted in working days, not in days: "every second working day" from a
         // Thursday is the following Monday.
         RecurrenceFrequency::Workday => Some(working_day_after(anchor, position * interval)),
-    }
+    };
+
+    Ok(date)
 }
 
 /// The day of the month, or nothing when the month is too short for it.
 fn day_of(year: i64, month: u32, day: u32) -> Option<CivilDate> {
     (day <= days_in_month(year, month)).then_some(CivilDate { year, month, day })
+}
+
+/// A monthly rule counted in lunar months.
+///
+/// Every field is read the way the Gregorian branch reads it, on the calendar
+/// the rule names: `on_last_day` is the twenty-ninth or the thirtieth as that
+/// month happens to run, no day named means the anchor's own day, and a day the
+/// month is too short for is skipped rather than pulled back — the thirtieth of
+/// a 29-day month is this calendar's 31 February. Leap months are months: "every
+/// month" lands in one when it comes round.
+fn lunar_month_candidate(
+    rule: &RecurrenceRule,
+    anchor: CivilDate,
+    steps: i64,
+) -> Result<Option<CivilDate>, RecurrenceError> {
+    let anchor = lunar_anchor(anchor)?;
+    let month = lunar::month_after(anchor, steps).ok_or(RecurrenceError::LunarOutOfRange)?;
+    let day = if rule.on_last_day {
+        month.length
+    } else {
+        rule.month_day.unwrap_or(anchor.day)
+    };
+
+    Ok(lunar::day_in(&month, day))
+}
+
+/// A yearly rule counted in lunar years — the lunar birthday.
+///
+/// The occurrence keeps the anchor's month, its day, and whether that month was
+/// a leap one. A year without that leap month is skipped, exactly as a common
+/// year is skipped by a rule anchored on 29 February: most years have no leap
+/// fourth month, and moving the occurrence into the ordinary fourth month would
+/// be a different date from the one the user chose.
+///
+/// Some leap months do not come round again at all before the calendar ends — a
+/// leap tenth month has not repeated since 1984 — and a rule anchored in one
+/// ends its series the way "the 31st, every February" does, in [`next_date`],
+/// rather than reporting the end of the calendar. Whether a rule form should let
+/// a user pick a position with that property, and what to tell them if it does,
+/// is a question about the form rather than about the engine.
+fn lunar_year_candidate(
+    anchor: CivilDate,
+    steps: i64,
+) -> Result<Option<CivilDate>, RecurrenceError> {
+    let anchor = lunar_anchor(anchor)?;
+    let year = anchor.year + steps;
+    if !lunar::covers_year(year) {
+        return Err(RecurrenceError::LunarOutOfRange);
+    }
+
+    // Inside the supported years a missing month is a real absence rather than
+    // missing data, so it is a skipped position and not an error.
+    Ok(lunar::month_of_year(year, anchor.month, anchor.leap)
+        .and_then(|month| lunar::day_in(&month, anchor.day)))
+}
+
+/// The anchor read on the lunar calendar, which is where a lunar rule counts
+/// from.
+fn lunar_anchor(anchor: CivilDate) -> Result<LunarDate, RecurrenceError> {
+    lunar::from_civil(anchor).ok_or(RecurrenceError::LunarOutOfRange)
+}
+
+/// Whether the rule counts its positions on the lunar calendar.
+///
+/// Only "monthly" and "yearly" do. The calendar decides what a month and a year
+/// are and nothing else, so a daily or weekly rule marked lunar is answered
+/// without ever opening it — and is not refused for an anchor outside its years.
+fn counts_in_lunar_months(rule: &RecurrenceRule) -> bool {
+    matches!(rule.calendar, RecurrenceCalendar::Lunar)
+        && matches!(
+            rule.frequency,
+            RecurrenceFrequency::Monthly | RecurrenceFrequency::Yearly
+        )
 }
 
 /// The weekdays a weekly rule lands on, as Monday-based indices in week order.
@@ -268,12 +449,22 @@ fn working_day_after(date: CivilDate, count: i64) -> CivilDate {
 
 /// Whether a date is a working day.
 ///
-/// Monday to Friday for now. The contract calls a working day holiday-aware, and
-/// this is the one question the engine asks about a single date — when the
-/// holiday and make-up-day data arrives it is read here, and every rule that
-/// counts working days follows without another change.
+/// The published arrangement decides it for the years [`crate::holidays`]
+/// covers: a weekend day the notice turns into a working day is one, and a day
+/// off it names is not, whatever weekday that falls on.
+///
+/// Beyond those years there is no arrangement to read, and the answer falls back
+/// to Monday to Friday. That is a deliberate choice between two wrong answers:
+/// refusing would stop every "every working day" task in the app on the first of
+/// January until the release carrying the next notice, while falling back is
+/// wrong only about the handful of days that notice moves.
+///
+/// The choice only holds while the fallback is not silent, so it is not left to
+/// a caller to remember: an answer that had to fall back says so in
+/// [`Occurrence::assumed_monday_to_friday`], and
+/// [`crate::holidays::coverage`] gives the years to name when it does.
 fn is_working_day(date: CivilDate) -> bool {
-    weekday_index(date) < 5
+    holidays::working_day(date).unwrap_or_else(|| weekday_index(date) < 5)
 }
 
 #[cfg(test)]
@@ -304,15 +495,25 @@ mod tests {
 
         while dates.len() < wanted {
             match next_occurrence(rule, anchor, &cursor).expect("a rule the engine can read") {
-                Some(date) => {
-                    cursor.clone_from(&date);
-                    dates.push(date);
+                Some(occurrence) => {
+                    cursor.clone_from(&occurrence.date);
+                    dates.push(occurrence.date);
                 }
                 None => break,
             }
         }
 
         dates
+    }
+
+    /// One answer, as the date alone — for the tests that ask a single question
+    /// and do not care what else the answer carries.
+    fn next_date_only(
+        rule: &RecurrenceRule,
+        anchor: &str,
+        after: &str,
+    ) -> Result<Option<String>, RecurrenceError> {
+        Ok(next_occurrence(rule, anchor, after)?.map(|occurrence| occurrence.date))
     }
 
     #[test]
@@ -636,7 +837,7 @@ mod tests {
     #[test]
     fn asking_from_before_the_anchor_answers_with_the_anchor() {
         assert_eq!(
-            next_occurrence(&rule(RecurrenceFrequency::Daily), "2026-07-23", "2026-01-01"),
+            next_date_only(&rule(RecurrenceFrequency::Daily), "2026-07-23", "2026-01-01"),
             Ok(Some("2026-07-23".to_owned()))
         );
     }
@@ -647,7 +848,7 @@ mod tests {
         mwf.weekdays = vec![Weekday::Monday, Weekday::Wednesday, Weekday::Friday];
 
         assert_eq!(
-            next_occurrence(&mwf, "2026-07-23", "2027-03-02"),
+            next_date_only(&mwf, "2026-07-23", "2027-03-02"),
             Ok(Some("2027-03-03".to_owned()))
         );
     }
@@ -668,15 +869,264 @@ mod tests {
         );
     }
 
+    /// The same rule, counted on the lunar calendar.
+    fn lunar_rule(frequency: RecurrenceFrequency) -> RecurrenceRule {
+        RecurrenceRule {
+            calendar: RecurrenceCalendar::Lunar,
+            ..rule(frequency)
+        }
+    }
+
+    /// How a date reads on the lunar calendar, as month, leap and day.
+    fn reading(date: &str) -> (u32, bool, u32) {
+        let lunar = lunar::from_civil(parse_date(date).expect("a readable date"))
+            .expect("a date inside the supported years");
+        (lunar.month, lunar.leap, lunar.day)
+    }
+
     #[test]
-    fn a_lunar_rule_is_refused_rather_than_answered_in_the_wrong_calendar() {
-        let mut lunar = rule(RecurrenceFrequency::Yearly);
-        lunar.calendar = RecurrenceCalendar::Lunar;
+    fn a_lunar_yearly_rule_keeps_its_lunar_date_and_moves_on_the_civil_one() {
+        // The first day of the first month — the one lunar date everybody
+        // knows the civil dates of. A civil yearly rule would answer
+        // 2027-02-17, which is nine days into the second month.
+        assert_eq!(
+            series(&lunar_rule(RecurrenceFrequency::Yearly), "2026-02-17", 5),
+            [
+                "2026-02-17",
+                "2027-02-06",
+                "2028-01-26",
+                "2029-02-13",
+                "2030-02-03"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_lunar_yearly_rule_on_a_leap_month_waits_for_the_year_that_has_one() {
+        // 2023 holds a leap second month; most years do not, so the rule skips
+        // them rather than landing in the ordinary second month, which is a
+        // different date from the one the user picked. The same reading a
+        // civil rule anchored on 29 February gets.
+        let leap = lunar::month_of_year(2023, 2, true).expect("2023 holds a leap second month");
+        let anchor = format_iso_date(lunar::day_in(&leap, 1).expect("its first day"));
+
+        let dates = series(&lunar_rule(RecurrenceFrequency::Yearly), &anchor, 2);
+        assert_eq!(dates[0], anchor);
+        assert_eq!(reading(&dates[1]), (2, true, 1));
+
+        let years_apart = parse_date(&dates[1]).expect("a readable date").year - 2023;
+        assert!(
+            years_apart > 10,
+            "a leap month is not a yearly event, but this one came back after {years_apart} years"
+        );
+    }
+
+    #[test]
+    fn a_lunar_monthly_rule_lands_on_the_same_day_of_each_lunar_month() {
+        // Anchored on the first day of the first month of 2026, which is
+        // 2026-02-17. The civil dates are 29 or 30 days apart in no pattern —
+        // that irregularity is the whole reason this cannot be a civil rule.
+        let dates = series(&lunar_rule(RecurrenceFrequency::Monthly), "2026-02-17", 4);
+        let readings: Vec<(u32, bool, u32)> = dates.iter().map(|date| reading(date)).collect();
 
         assert_eq!(
-            next_occurrence(&lunar, "2026-09-01", "2026-09-01"),
-            Err(RecurrenceError::UnsupportedCalendar)
+            readings,
+            [(1, false, 1), (2, false, 1), (3, false, 1), (4, false, 1)]
         );
+    }
+
+    #[test]
+    fn a_lunar_monthly_rule_counts_a_leap_month_as_a_month() {
+        // The month after the second month of 2023 is its leap second month,
+        // not the third: "every month" means every month the calendar has.
+        let second = lunar::month_of_year(2023, 2, false).expect("a second month");
+        let anchor = format_iso_date(lunar::day_in(&second, 1).expect("its first day"));
+
+        let dates = series(&lunar_rule(RecurrenceFrequency::Monthly), &anchor, 3);
+        let readings: Vec<(u32, bool, u32)> = dates.iter().map(|date| reading(date)).collect();
+
+        assert_eq!(readings, [(2, false, 1), (2, true, 1), (3, false, 1)]);
+    }
+
+    #[test]
+    fn a_lunar_month_too_short_for_the_day_is_skipped_rather_than_moved() {
+        // The thirtieth of a 29-day month is this calendar's 31 February. The
+        // months that have one are not evenly spaced, so some steps are one
+        // month and others are several.
+        let mut thirtieth = lunar_rule(RecurrenceFrequency::Monthly);
+        thirtieth.month_day = Some(30);
+
+        let dates = series(&thirtieth, "2026-02-17", 5);
+        assert!(
+            dates.iter().skip(1).all(|date| reading(date).2 == 30),
+            "{dates:?}"
+        );
+        assert!(
+            dates.windows(2).any(|pair| {
+                let gap = |date: &str| {
+                    crate::civil::days_from_civil(parse_date(date).expect("a readable date"))
+                };
+                gap(&pair[1]) - gap(&pair[0]) > 31
+            }),
+            "a month without a thirtieth should have been passed over: {dates:?}"
+        );
+    }
+
+    #[test]
+    fn the_last_day_of_a_lunar_month_is_its_own_length() {
+        let mut month_end = lunar_rule(RecurrenceFrequency::Monthly);
+        month_end.on_last_day = true;
+
+        let dates = series(&month_end, "2026-02-17", 4);
+        for date in dates.iter().skip(1) {
+            let lunar_date =
+                lunar::from_civil(parse_date(date).expect("a readable date")).expect("in range");
+            let month = lunar::month_of_year(lunar_date.year, lunar_date.month, lunar_date.leap)
+                .expect("its own month");
+            assert_eq!(lunar_date.day, month.length, "{date}");
+        }
+    }
+
+    #[test]
+    fn a_day_and_a_week_are_the_same_in_both_calendars() {
+        // Only "monthly" and "yearly" mean something different on the lunar
+        // calendar, so a daily or weekly rule marked lunar answers exactly as
+        // the Gregorian one does rather than being refused.
+        assert_eq!(
+            series(&lunar_rule(RecurrenceFrequency::Daily), "2026-07-23", 3),
+            series(&rule(RecurrenceFrequency::Daily), "2026-07-23", 3)
+        );
+        assert_eq!(
+            series(&lunar_rule(RecurrenceFrequency::Weekly), "2026-07-23", 3),
+            series(&rule(RecurrenceFrequency::Weekly), "2026-07-23", 3)
+        );
+    }
+
+    #[test]
+    fn a_lunar_rule_outside_the_years_the_calendar_is_known_for_is_refused() {
+        // Not answered in the wrong calendar and not quietly ended: a series
+        // that has run out of data says so.
+        let yearly = lunar_rule(RecurrenceFrequency::Yearly);
+
+        assert_eq!(
+            next_date_only(&yearly, "2101-02-17", "2101-02-17"),
+            Err(RecurrenceError::LunarOutOfRange)
+        );
+        assert_eq!(
+            next_date_only(&yearly, "2098-02-17", "2100-12-31"),
+            Err(RecurrenceError::LunarOutOfRange)
+        );
+        // Inside the range the same rule answers.
+        assert!(next_date_only(&yearly, "2098-02-17", "2098-02-17").is_ok());
+    }
+
+    #[test]
+    fn an_anchor_the_lunar_calendar_does_not_reach_is_refused_before_anything_else() {
+        // The low end of the range, which an end date must not turn into an
+        // empty series: the anchor cannot be read at all, so there is nothing to
+        // say the series has ended.
+        let mut until_2000 = lunar_rule(RecurrenceFrequency::Yearly);
+        until_2000.until = Some("2000-01-01".to_owned());
+
+        assert_eq!(
+            next_date_only(&until_2000, "1928-06-01", "1928-06-01"),
+            Err(RecurrenceError::LunarOutOfRange)
+        );
+
+        // A daily rule never opens the lunar calendar, so the same anchor is no
+        // trouble there.
+        assert_eq!(
+            next_date_only(
+                &lunar_rule(RecurrenceFrequency::Daily),
+                "1928-06-01",
+                "1928-06-01"
+            ),
+            Ok(Some("1928-06-02".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_lunar_series_that_ends_before_the_calendar_does_ends_rather_than_fails() {
+        // Both of these ask for an occurrence the rule could not have returned
+        // anyway — one is past its end date, the other past its count — and
+        // reporting the end of the calendar instead of the end of the rule is
+        // the engine answering a question nobody asked. The Gregorian rules of
+        // the same shape answer `Ok(None)`.
+        let mut until_the_last_year = lunar_rule(RecurrenceFrequency::Yearly);
+        until_the_last_year.until = Some("2100-12-31".to_owned());
+
+        assert_eq!(
+            next_date_only(&until_the_last_year, "2099-02-01", "2100-12-30"),
+            Ok(None)
+        );
+
+        let mut once = lunar_rule(RecurrenceFrequency::Yearly);
+        once.count = Some(1);
+
+        assert_eq!(next_date_only(&once, "2100-02-09", "2100-02-09"), Ok(None));
+
+        // The refusal is still there for the rule that carries neither: this one
+        // really is asking for a year the calendar does not reach.
+        assert_eq!(
+            next_date_only(
+                &lunar_rule(RecurrenceFrequency::Yearly),
+                "2100-02-09",
+                "2100-02-09"
+            ),
+            Err(RecurrenceError::LunarOutOfRange)
+        );
+    }
+
+    #[test]
+    fn a_lunar_position_that_never_comes_round_again_ends_the_search() {
+        // A leap tenth month last happened in 1984 and does not happen again
+        // before the calendar ends, so a yearly rule anchored in one has the
+        // anchor and nothing more. That is the same answer the Gregorian branch
+        // gives "the 31st, every February" — and not a report that the calendar
+        // stops in 2100, which is true but is not what went wrong.
+        let leap = lunar::month_of_year(1984, 10, true).expect("1984 holds a leap tenth month");
+        let anchor = format_iso_date(lunar::day_in(&leap, 1).expect("its first day"));
+        let yearly = lunar_rule(RecurrenceFrequency::Yearly);
+
+        assert_eq!(
+            series(&yearly, &anchor, 5),
+            [anchor.clone()],
+            "only the anchor, which is an occurrence by definition"
+        );
+        assert_eq!(next_date_only(&yearly, &anchor, &anchor), Ok(None));
+    }
+
+    #[test]
+    fn an_answer_counted_past_the_published_years_says_so() {
+        let workday = rule(RecurrenceFrequency::Workday);
+
+        let inside = next_occurrence(&workday, "2026-07-23", "2026-07-23")
+            .expect("a rule the engine can read")
+            .expect("an occurrence");
+        assert_eq!(inside.date, "2026-07-24");
+        assert!(!inside.assumed_monday_to_friday);
+
+        // The first day past the table. 2027-01-01 is a Friday and no notice
+        // has been published saying it is new year's day, so the engine counts
+        // it as a working day; the date is still the best answer there is, but
+        // it is arithmetic rather than data and the answer carries that.
+        let beyond = next_occurrence(&workday, "2026-12-31", "2026-12-31")
+            .expect("a rule the engine can read")
+            .expect("an occurrence");
+        assert_eq!(beyond.date, "2027-01-01");
+        assert!(beyond.assumed_monday_to_friday);
+        assert_eq!(
+            holidays::coverage(),
+            Some((2024, 2026)),
+            "the years to name when an answer says so"
+        );
+
+        // No other frequency reads the arrangement, so no other frequency can
+        // have fallen back to the week.
+        let daily = next_occurrence(&rule(RecurrenceFrequency::Daily), "2030-01-01", "2030-01-01")
+            .expect("a rule the engine can read")
+            .expect("an occurrence");
+        assert!(!daily.assumed_monday_to_friday);
     }
 
     #[test]
@@ -686,7 +1136,7 @@ mod tests {
         standing_still.interval = 0;
 
         assert_eq!(
-            next_occurrence(&standing_still, "2026-07-23", "2026-07-23"),
+            next_date_only(&standing_still, "2026-07-23", "2026-07-23"),
             Err(RecurrenceError::UnusableRule(
                 ContractValidationError::InvalidRecurrence
             ))
@@ -696,7 +1146,7 @@ mod tests {
         repeated_day.weekdays = vec![Weekday::Monday, Weekday::Monday];
 
         assert_eq!(
-            next_occurrence(&repeated_day, "2026-07-23", "2026-07-23"),
+            next_date_only(&repeated_day, "2026-07-23", "2026-07-23"),
             Err(RecurrenceError::UnusableRule(
                 ContractValidationError::DuplicateEntry
             ))
@@ -708,15 +1158,15 @@ mod tests {
         let daily = rule(RecurrenceFrequency::Daily);
 
         assert_eq!(
-            next_occurrence(&daily, "2026-02-31", "2026-07-23"),
+            next_date_only(&daily, "2026-02-31", "2026-07-23"),
             Err(RecurrenceError::UnreadableDate)
         );
         assert_eq!(
-            next_occurrence(&daily, "2026-07-23", "今天"),
+            next_date_only(&daily, "2026-07-23", "今天"),
             Err(RecurrenceError::UnreadableDate)
         );
         assert_eq!(
-            next_occurrence(&daily, "2026-07-23T10:15:00Z", "2026-07-23"),
+            next_date_only(&daily, "2026-07-23T10:15:00Z", "2026-07-23"),
             Ok(Some("2026-07-24".to_owned())),
             "a date followed by a time is still a date"
         );
@@ -742,14 +1192,76 @@ mod tests {
     }
 
     #[test]
+    fn a_working_day_rule_works_the_saturdays_the_notice_names() {
+        // 2026-02-14 is a Saturday everybody works, to pay for the nine days
+        // off that follow it: the rule lands on it, then steps over the whole
+        // spring festival to the Tuesday after it.
+        assert_eq!(
+            series(&rule(RecurrenceFrequency::Workday), "2026-02-13", 4),
+            ["2026-02-13", "2026-02-14", "2026-02-24", "2026-02-25"]
+        );
+
+        // The same again in May, where the make-up Saturday stands alone: the
+        // Sunday after it is still a Sunday.
+        assert_eq!(
+            series(&rule(RecurrenceFrequency::Workday), "2026-05-08", 3),
+            ["2026-05-08", "2026-05-09", "2026-05-11"]
+        );
+    }
+
+    #[test]
+    fn a_working_day_rule_steps_over_a_holiday_that_falls_on_a_weekday() {
+        // 2026-04-06 is a Monday off for the qingming festival, so the working
+        // day after Friday the 3rd is the Tuesday.
+        assert_eq!(
+            series(&rule(RecurrenceFrequency::Workday), "2026-04-03", 3),
+            ["2026-04-03", "2026-04-07", "2026-04-08"]
+        );
+
+        // And the seven days of the national holiday, which swallow a whole
+        // working week.
+        assert_eq!(
+            series(&rule(RecurrenceFrequency::Workday), "2026-09-30", 2),
+            ["2026-09-30", "2026-10-08"]
+        );
+    }
+
+    #[test]
+    fn every_n_working_days_counts_the_arrangement_too() {
+        let mut every_other = rule(RecurrenceFrequency::Workday);
+        every_other.interval = 2;
+
+        // From the Thursday before the spring festival: Friday the 13th is one
+        // working day on and the make-up Saturday is two, then the next two
+        // working days are the 24th and the 25th.
+        assert_eq!(
+            series(&every_other, "2026-02-12", 3),
+            ["2026-02-12", "2026-02-14", "2026-02-25"]
+        );
+    }
+
+    #[test]
+    fn beyond_the_published_years_a_working_day_is_monday_to_friday_again() {
+        // No arrangement has been published for 2027, so the engine answers
+        // from the week alone: the first of October is a Friday and the rule
+        // does not know it is a holiday. Such an answer says so — see
+        // `an_answer_counted_past_the_published_years_says_so`.
+        assert_eq!(holidays::coverage(), Some((2024, 2026)));
+        assert_eq!(
+            series(&rule(RecurrenceFrequency::Workday), "2027-10-01", 2),
+            ["2027-10-01", "2027-10-04"]
+        );
+    }
+
+    #[test]
     fn the_error_says_which_rule_it_refused() {
         assert_eq!(
             RecurrenceError::UnusableRule(ContractValidationError::InvalidRecurrence).to_string(),
             "the recurrence rule is not a usable combination"
         );
         assert_eq!(
-            RecurrenceError::UnsupportedCalendar.to_string(),
-            "the lunar calendar is not supported yet"
+            RecurrenceError::LunarOutOfRange.to_string(),
+            "the lunar calendar is only known from 1929 to 2100"
         );
     }
 }
