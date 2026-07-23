@@ -19,6 +19,7 @@ import {
   isTodayCardOpen,
   isTodayCardWindow,
 } from "@/lib/today-card";
+import { MAX_TITLE_CHARS } from "@/lib/native";
 import { setupTodayCardSync } from "@/lib/today-card-sync";
 import {
   deviceId,
@@ -332,9 +333,16 @@ function updateTheme(preference: ThemePreference): void {
 
     <form class="surface-card mb-6 p-2" @submit.prevent="submit">
       <div class="flex gap-2">
+        <!--
+          The title stops where the contract stops (`MAX_TITLE_CHARS`, generated
+          from Rust). Without the cap a longer paste is accepted here, refused by
+          the database, and lost on the next restart — the user would never see
+          again what they had just typed.
+        -->
         <input
           ref="draftInputRef"
           v-model="draft"
+          :maxlength="MAX_TITLE_CHARS"
           class="min-w-0 flex-1 rounded-lg border-0 bg-transparent px-3 py-2 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-sky-500"
           placeholder="添加一项待办…"
           aria-label="待办标题"

@@ -10,14 +10,15 @@ use tauri_specta::{collect_commands, Builder};
 use todo_contracts::Todo;
 #[cfg(test)]
 use todo_contracts::{
-    HealthResponse, SyncOperationKind, SyncRequest, SyncResponse, TodoPatch, TodoStatus,
-    TodoSyncChange, TodoSyncOperation,
+    Attachment, AttachmentKind, HealthResponse, RecurrenceCalendar, RecurrenceFrequency,
+    RecurrenceRule, Subtask, SyncOperationKind, SyncRequest, SyncResponse, TodoPatch, TodoStatus,
+    TodoSyncChange, TodoSyncOperation, Weekday,
 };
 use ts_rs::TS;
 #[cfg(test)]
 use ts_rs::Config;
 
-use todo_db::{PendingWriteReport, TodoDb};
+use todo_db::{PendingWriteReport, TodoDb, WriteRejection};
 
 #[derive(Clone, Debug, Serialize, TS, Type)]
 #[serde(rename_all = "camelCase")]
@@ -44,10 +45,15 @@ fn list_todos(db: tauri::State<'_, TodoDb>) -> Result<Vec<Todo>, String> {
 }
 
 /// Inserts a todo or overwrites the stored row with the same id.
+///
+/// The error carries whether the refusal is permanent so the view layer can
+/// tell "the database is busy, keep the write and retry" from "the contract
+/// refuses this todo, no retry will help" — parking the second in the retry
+/// journal would promise the user a write that can never land.
 #[tauri::command]
 #[specta::specta]
-fn save_todo(db: tauri::State<'_, TodoDb>, todo: Todo) -> Result<(), String> {
-    db.save(&todo).map_err(|error| error.to_string())
+fn save_todo(db: tauri::State<'_, TodoDb>, todo: Todo) -> Result<(), WriteRejection> {
+    db.save(&todo).map_err(WriteRejection::from)
 }
 
 /// Removes a todo by id; removing an unknown id succeeds.
@@ -76,13 +82,19 @@ fn replay_pending_writes(
 }
 
 fn ipc_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![
-        get_runtime_info,
-        list_todos,
-        save_todo,
-        delete_todo,
-        replay_pending_writes
-    ])
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            get_runtime_info,
+            list_todos,
+            save_todo,
+            delete_todo,
+            replay_pending_writes
+        ])
+        // The title is the one contract limit a user can reach by typing today,
+        // so the view layer caps its input at the same number the contract
+        // enforces. Sharing the constant keeps the two from drifting apart and
+        // recreating "the field accepts input the database then refuses".
+        .constant("MAX_TITLE_CHARS", todo_contracts::MAX_TITLE_CHARS)
 }
 
 #[cfg(debug_assertions)]
@@ -235,6 +247,13 @@ mod tests {
         Todo::export(&models_config).expect("failed to export Todo type");
         TodoStatus::export(&models_config).expect("failed to export TodoStatus type");
         TodoPatch::export(&models_config).expect("failed to export TodoPatch type");
+        Subtask::export(&models_config).expect("export Subtask type");
+        Attachment::export(&models_config).expect("export Attachment type");
+        AttachmentKind::export(&models_config).expect("export AttachmentKind type");
+        RecurrenceRule::export(&models_config).expect("export RecurrenceRule type");
+        RecurrenceFrequency::export(&models_config).expect("export RecurrenceFrequency type");
+        RecurrenceCalendar::export(&models_config).expect("export RecurrenceCalendar type");
+        Weekday::export(&models_config).expect("export Weekday type");
         SyncOperationKind::export(&models_config).expect("export SyncOperationKind type");
         TodoSyncOperation::export(&models_config).expect("export TodoSyncOperation type");
         TodoSyncChange::export(&models_config).expect("export TodoSyncChange type");

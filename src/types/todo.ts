@@ -1,2 +1,9 @@
 export type { Todo } from "@/bindings/models/Todo";
 export type { TodoStatus } from "@/bindings/models/TodoStatus";
+export type { Subtask } from "@/bindings/models/Subtask";
+export type { Attachment } from "@/bindings/models/Attachment";
+export type { AttachmentKind } from "@/bindings/models/AttachmentKind";
+export type { RecurrenceRule } from "@/bindings/models/RecurrenceRule";
+export type { RecurrenceFrequency } from "@/bindings/models/RecurrenceFrequency";
+export type { RecurrenceCalendar } from "@/bindings/models/RecurrenceCalendar";
+export type { Weekday } from "@/bindings/models/Weekday";

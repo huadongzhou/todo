@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import type { Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
+import { MAX_TITLE_CHARS } from "@/lib/native";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { buildDeleteOperation, buildUpsertOperation, recordOperation } from "@/lib/sync-engine";
@@ -22,6 +23,23 @@ export interface StorageAlert {
 
 const newId = () => crypto.randomUUID();
 
+/**
+ * Trims a title and caps it at the contract's limit, counted in code points to
+ * match the Rust `chars().count()` check. The draft input caps at the same
+ * number, so on the typed path this only trims whitespace; the cap here guards
+ * the paths that build a title without going through that input (quick add,
+ * future callers) so none of them can create a todo the database would refuse
+ * and then lose on the next restart.
+ */
+function normalizeTitle(raw: string): string {
+  const trimmed = raw.trim();
+  // `Array.from` walks code points, which is exactly what `chars()` counts on
+  // the Rust side; counting UTF-16 units instead would reject titles the
+  // contract accepts.
+  const points = Array.from(trimmed);
+  return points.length > MAX_TITLE_CHARS ? points.slice(0, MAX_TITLE_CHARS).join("") : trimmed;
+}
+
 export const useTodoStore = defineStore("todos", () => {
   const items = ref<Todo[]>([]);
   const activeItems = computed(() => items.value.filter((todo) => todo.status === "open"));
@@ -33,12 +51,15 @@ export const useTodoStore = defineStore("todos", () => {
   // reports into a state the UI can show and the user can act on.
   const degradedIds = ref<ReadonlySet<string>>(new Set());
   const failedIds = ref<ReadonlySet<string>>(new Set());
-  /** Whether the startup replay left writes the database still owes. */
+  /** Whether the journal still holds writes the database has not taken. */
   const startupBacklog = ref(false);
 
   const storageAlert = computed<StorageAlert | null>(() => {
     if (failedIds.value.size > 0) {
-      return { tone: "error", message: "有改动没能保存到本机，请检查磁盘空间后重试。" };
+      // "failed" now covers two causes — storage would not take the write, or
+      // the contract refuses this todo for good — so the wording names both
+      // instead of asserting the disk is full.
+      return { tone: "error", message: "有改动没能保存到本机，请检查内容或存储空间后重试。" };
     }
     if (degradedIds.value.size > 0 || startupBacklog.value) {
       return { tone: "warn", message: "有改动暂存在本地缓存，尚未写入数据库，重启后会自动补写。" };
@@ -61,6 +82,12 @@ export const useTodoStore = defineStore("todos", () => {
     degradedIds.value = degraded;
     failedIds.value = failed;
 
+    // The backlog is whatever storage still owes *now*, not what it owed at
+    // startup: once the journal is empty the warning has nothing left to warn
+    // about, and saying "it will be written on the next restart" after it was
+    // written is worse than saying nothing.
+    startupBacklog.value = repository.outstanding() > 0;
+
     if (outcome === "stored") return;
     writeDiagnostic(outcome === "failed" ? "error" : "warn", "A todo write did not reach storage", {
       id,
@@ -70,8 +97,14 @@ export const useTodoStore = defineStore("todos", () => {
 
   /** Records what the startup replay left behind, so the UI can say so. */
   function notePendingWrites(flush: PendingWriteFlush): void {
-    startupBacklog.value =
-      flush.status === "failed" || (flush.status === "flushed" && flush.rejected > 0);
+    // Read from the journal, the same source `noteWriteOutcome` uses, so the
+    // two can never disagree. Deriving it from the flush summary let them: a
+    // replay that applied everything but could not rewrite the journal still
+    // owes those writes, which `rejected` does not count — the banner stayed
+    // hidden at startup and then appeared out of nowhere on the next unrelated
+    // write. A replay that failed outright is kept as a floor, because a
+    // storage that cannot be replayed may also be unreadable to `outstanding`.
+    startupBacklog.value = repository.outstanding() > 0 || flush.status === "failed";
   }
 
   /** Writes a todo back to storage; failures degrade inside the repository. */
@@ -91,7 +124,7 @@ export const useTodoStore = defineStore("todos", () => {
   }
 
   function add(input: string | NewTodoInput) {
-    const normalized = typeof input === "string" ? input.trim() : input.title.trim();
+    const normalized = normalizeTitle(typeof input === "string" ? input : input.title);
     if (!normalized) return false;
 
     const todo: Todo = {
@@ -102,6 +135,13 @@ export const useTodoStore = defineStore("todos", () => {
       completedAt: null,
       dueDate: typeof input === "string" ? null : (input.dueDate ?? null),
       reminderAt: typeof input === "string" ? null : (input.reminderAt ?? null),
+      // The list-valued fields have one empty value rather than two (`[]` and
+      // "not set"), so a new todo starts with the empty one; the optional
+      // scalars stay absent until something sets them.
+      tagIds: [],
+      subtasks: [],
+      attachments: [],
+      dependsOn: [],
     };
 
     items.value.unshift(todo);
@@ -127,7 +167,7 @@ export const useTodoStore = defineStore("todos", () => {
     if (!todo) return;
 
     if (patch.title !== undefined) {
-      const normalized = patch.title.trim();
+      const normalized = normalizeTitle(patch.title);
       if (normalized) todo.title = normalized;
     }
     if (patch.dueDate !== undefined) todo.dueDate = patch.dueDate;
@@ -192,10 +232,29 @@ export const useTodoStore = defineStore("todos", () => {
   ): void {
     const existing = items.value.find((item) => item.id === todoId);
     if (existing) {
+      // Field level, one field per line: an absent key means the remote change
+      // did not touch that field, so it must keep the local value. Every field
+      // the contract carries is listed — a field left out here would silently
+      // stop syncing.
       if (patch?.title !== undefined) existing.title = patch.title;
       if (patch?.status !== undefined) existing.status = patch.status;
       if (patch?.dueDate !== undefined) existing.dueDate = patch.dueDate;
       if (patch?.completedAt !== undefined) existing.completedAt = patch.completedAt;
+      if (patch?.reminderAt !== undefined) existing.reminderAt = patch.reminderAt;
+      if (patch?.notes !== undefined) existing.notes = patch.notes;
+      if (patch?.startDate !== undefined) existing.startDate = patch.startDate;
+      if (patch?.startsAt !== undefined) existing.startsAt = patch.startsAt;
+      if (patch?.endsAt !== undefined) existing.endsAt = patch.endsAt;
+      if (patch?.estimatedMinutes !== undefined) existing.estimatedMinutes = patch.estimatedMinutes;
+      if (patch?.recurrence !== undefined) existing.recurrence = patch.recurrence;
+      if (patch?.listId !== undefined) existing.listId = patch.listId;
+      if (patch?.important !== undefined) existing.important = patch.important;
+      if (patch?.urgent !== undefined) existing.urgent = patch.urgent;
+      if (patch?.sortOrder !== undefined) existing.sortOrder = patch.sortOrder;
+      if (patch?.tagIds !== undefined) existing.tagIds = patch.tagIds;
+      if (patch?.subtasks !== undefined) existing.subtasks = patch.subtasks;
+      if (patch?.attachments !== undefined) existing.attachments = patch.attachments;
+      if (patch?.dependsOn !== undefined) existing.dependsOn = patch.dependsOn;
       persist(existing);
       return;
     }
@@ -210,7 +269,21 @@ export const useTodoStore = defineStore("todos", () => {
         createdAt: occurredAt,
         completedAt: patch.completedAt ?? null,
         dueDate: patch.dueDate ?? null,
-        reminderAt: null,
+        reminderAt: patch.reminderAt ?? null,
+        notes: patch.notes ?? null,
+        startDate: patch.startDate ?? null,
+        startsAt: patch.startsAt ?? null,
+        endsAt: patch.endsAt ?? null,
+        estimatedMinutes: patch.estimatedMinutes ?? null,
+        recurrence: patch.recurrence ?? null,
+        listId: patch.listId ?? null,
+        important: patch.important ?? null,
+        urgent: patch.urgent ?? null,
+        sortOrder: patch.sortOrder ?? null,
+        tagIds: patch.tagIds ?? [],
+        subtasks: patch.subtasks ?? [],
+        attachments: patch.attachments ?? [],
+        dependsOn: patch.dependsOn ?? [],
       };
       items.value.unshift(created);
       persist(created);

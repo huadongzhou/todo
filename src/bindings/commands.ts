@@ -8,8 +8,15 @@ export const commands = {
 	getRuntimeInfo: () => __TAURI_INVOKE<RuntimeInfo>("get_runtime_info"),
 	/**  Returns every locally stored todo, newest first. */
 	listTodos: () => typedError<Todo_Serialize[], string>(__TAURI_INVOKE("list_todos")),
-	/**  Inserts a todo or overwrites the stored row with the same id. */
-	saveTodo: (todo: Todo_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_todo", { todo })),
+	/**
+	 *  Inserts a todo or overwrites the stored row with the same id.
+	 * 
+	 *  The error carries whether the refusal is permanent so the view layer can
+	 *  tell "the database is busy, keep the write and retry" from "the contract
+	 *  refuses this todo, no retry will help" — parking the second in the retry
+	 *  journal would promise the user a write that can never land.
+	 */
+	saveTodo: (todo: Todo_Deserialize) => typedError<null, WriteRejection>(__TAURI_INVOKE("save_todo", { todo })),
 	/**  Removes a todo by id; removing an unknown id succeeds. */
 	deleteTodo: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_todo", { id })),
 	/**
@@ -24,7 +31,41 @@ export const commands = {
 	replayPendingWrites: (upserts: Todo_Deserialize[], deletions: string[]) => typedError<PendingWriteReport, string>(__TAURI_INVOKE("replay_pending_writes", { upserts, deletions })),
 };
 
+/* Constants */
+export const MAX_TITLE_CHARS = 500 as const;
+
 /* Types */
+/**  A file or link attached to a task. */
+export type Attachment = Attachment_Serialize | Attachment_Deserialize;
+
+export type AttachmentKind = "link" | "file";
+
+/**  A file or link attached to a task. */
+export type Attachment_Deserialize = {
+	id: string,
+	kind: AttachmentKind,
+	/**
+	 *  Where the attachment lives: the URL for a link, the file location for a
+	 *  file.
+	 */
+	url: string,
+	/**  Label shown instead of the raw location. */
+	name?: string | null,
+};
+
+/**  A file or link attached to a task. */
+export type Attachment_Serialize = {
+	id: string,
+	kind: AttachmentKind,
+	/**
+	 *  Where the attachment lives: the URL for a link, the file location for a
+	 *  file.
+	 */
+	url: string,
+	/**  Label shown instead of the raw location. */
+	name?: string | null,
+};
+
 /**
  *  Outcome of replaying the writes the view layer parked outside SQLite.
  * 
@@ -38,10 +79,97 @@ export type PendingWriteReport = {
 	rejected: RejectedWrite[],
 };
 
+export type RecurrenceCalendar = "gregorian" | "lunar";
+
+export type RecurrenceFrequency = "daily" | "weekly" | "monthly" | "yearly" | 
+/**  Every working day, which is holiday-aware rather than "Monday to Friday". */
+"workday";
+
+/**
+ *  How a task repeats.
+ * 
+ *  The rule is flat rather than a nested variant per frequency because it is
+ *  stored, synced and edited as one unit; the combinations that do not make
+ *  sense are rejected by `validate` instead of being made unrepresentable, which
+ *  keeps the generated TypeScript a single object type.
+ */
+export type RecurrenceRule = RecurrenceRule_Serialize | RecurrenceRule_Deserialize;
+
+/**
+ *  How a task repeats.
+ * 
+ *  The rule is flat rather than a nested variant per frequency because it is
+ *  stored, synced and edited as one unit; the combinations that do not make
+ *  sense are rejected by `validate` instead of being made unrepresentable, which
+ *  keeps the generated TypeScript a single object type.
+ */
+export type RecurrenceRule_Deserialize = {
+	frequency: RecurrenceFrequency,
+	/**  Repeat every `interval` units of `frequency`. */
+	interval: number,
+	/**
+	 *  For weekly rules, the days it lands on (e.g. Monday/Wednesday/Friday).
+	 *  Empty means "the same weekday as the task's due date".
+	 */
+	weekdays?: Weekday[],
+	/**  For monthly rules, the day of the month (1–31). */
+	monthDay?: number | null,
+	/**
+	 *  For monthly rules, "the last day of the month" — the one position that
+	 *  cannot be written as a fixed day number.
+	 */
+	onLastDay: boolean,
+	/**  Which calendar the rule is counted in. */
+	calendar: RecurrenceCalendar,
+	/**  Local date the repetition stops on, inclusive. */
+	until?: string | null,
+	/**  Number of occurrences the repetition stops after. */
+	count?: number | null,
+};
+
+/**
+ *  How a task repeats.
+ * 
+ *  The rule is flat rather than a nested variant per frequency because it is
+ *  stored, synced and edited as one unit; the combinations that do not make
+ *  sense are rejected by `validate` instead of being made unrepresentable, which
+ *  keeps the generated TypeScript a single object type.
+ */
+export type RecurrenceRule_Serialize = {
+	frequency: RecurrenceFrequency,
+	/**  Repeat every `interval` units of `frequency`. */
+	interval: number,
+	/**
+	 *  For weekly rules, the days it lands on (e.g. Monday/Wednesday/Friday).
+	 *  Empty means "the same weekday as the task's due date".
+	 */
+	weekdays: Weekday[],
+	/**  For monthly rules, the day of the month (1–31). */
+	monthDay?: number | null,
+	/**
+	 *  For monthly rules, "the last day of the month" — the one position that
+	 *  cannot be written as a fixed day number.
+	 */
+	onLastDay: boolean,
+	/**  Which calendar the rule is counted in. */
+	calendar: RecurrenceCalendar,
+	/**  Local date the repetition stops on, inclusive. */
+	until?: string | null,
+	/**  Number of occurrences the repetition stops after. */
+	count?: number | null,
+};
+
 /**  A single entry SQLite would not take, with the reason for diagnostics. */
 export type RejectedWrite = {
 	id: string,
 	error: string,
+	/**
+	 *  Whether retrying is pointless. A busy or full database refuses a write
+	 *  this minute and takes it the next, so the caller keeps the entry; an
+	 *  entry the contract refuses will be refused by every future build too, so
+	 *  the caller must park it instead of replaying it forever.
+	 */
+	permanent: boolean,
 };
 
 export type RuntimeInfo = {
@@ -49,10 +177,37 @@ export type RuntimeInfo = {
 	appVersion: string,
 };
 
+/**  One step of a task's checklist. */
+export type Subtask = {
+	id: string,
+	title: string,
+	done: boolean,
+};
+
+/**
+ *  A task.
+ * 
+ *  Every field beyond the original six is optional or list-valued with a serde
+ *  default, which is what keeps a payload written by an earlier build readable:
+ *  the fields it never knew about simply come back empty. `deny_unknown_fields`
+ *  only bites in the other direction — a payload from a *newer* build — and the
+ *  repository has no version negotiation by design (AGENTS.md), so bindings are
+ *  regenerated and callers are updated together with the contract.
+ */
 export type Todo = Todo_Serialize | Todo_Deserialize;
 
 export type TodoStatus = "open" | "completed";
 
+/**
+ *  A task.
+ * 
+ *  Every field beyond the original six is optional or list-valued with a serde
+ *  default, which is what keeps a payload written by an earlier build readable:
+ *  the fields it never knew about simply come back empty. `deny_unknown_fields`
+ *  only bites in the other direction — a payload from a *newer* build — and the
+ *  repository has no version negotiation by design (AGENTS.md), so bindings are
+ *  regenerated and callers are updated together with the contract.
+ */
 export type Todo_Deserialize = {
 	id: string,
 	title: string,
@@ -61,8 +216,55 @@ export type Todo_Deserialize = {
 	completedAt: string | null,
 	dueDate?: string | null,
 	reminderAt?: string | null,
+	/**  Free-text description, searchable alongside the title. */
+	notes?: string | null,
+	/**
+	 *  Local date the task becomes actionable; before it the task stays out of
+	 *  the way instead of demanding attention.
+	 */
+	startDate?: string | null,
+	/**  Start of a timed block, as an instant (the due date stays a plain date). */
+	startsAt?: string | null,
+	/**  End of a timed block; only meaningful together with `starts_at`. */
+	endsAt?: string | null,
+	/**  Planned effort in minutes, compared against recorded focus time later. */
+	estimatedMinutes?: number | null,
+	/**  Repeat rule; absent means the task happens once. */
+	recurrence?: RecurrenceRule_Deserialize | null,
+	/**  The list this task belongs to; absent means the inbox. */
+	listId?: string | null,
+	/**
+	 *  Eisenhower axes. Kept separate and tri-state on purpose: `None` is "the
+	 *  user has not said", which is what lets the urgency default be inferred
+	 *  from the due date without overwriting a deliberate choice.
+	 */
+	important?: boolean | null,
+	urgent?: boolean | null,
+	/**
+	 *  Manual position within a list. Fractional so a drag between two rows
+	 *  only writes the row that moved.
+	 */
+	sortOrder?: number | null,
+	/**  Tags applied to this task, by tag id. */
+	tagIds?: string[],
+	/**  Checklist inside the task; the order of the vector is the display order. */
+	subtasks?: Subtask[],
+	/**  Files and links hanging off the task. */
+	attachments?: Attachment_Deserialize[],
+	/**  Tasks that must be done before this one. */
+	dependsOn?: string[],
 };
 
+/**
+ *  A task.
+ * 
+ *  Every field beyond the original six is optional or list-valued with a serde
+ *  default, which is what keeps a payload written by an earlier build readable:
+ *  the fields it never knew about simply come back empty. `deny_unknown_fields`
+ *  only bites in the other direction — a payload from a *newer* build — and the
+ *  repository has no version negotiation by design (AGENTS.md), so bindings are
+ *  regenerated and callers are updated together with the contract.
+ */
 export type Todo_Serialize = {
 	id: string,
 	title: string,
@@ -71,6 +273,59 @@ export type Todo_Serialize = {
 	completedAt: string | null,
 	dueDate?: string | null,
 	reminderAt?: string | null,
+	/**  Free-text description, searchable alongside the title. */
+	notes?: string | null,
+	/**
+	 *  Local date the task becomes actionable; before it the task stays out of
+	 *  the way instead of demanding attention.
+	 */
+	startDate?: string | null,
+	/**  Start of a timed block, as an instant (the due date stays a plain date). */
+	startsAt?: string | null,
+	/**  End of a timed block; only meaningful together with `starts_at`. */
+	endsAt?: string | null,
+	/**  Planned effort in minutes, compared against recorded focus time later. */
+	estimatedMinutes?: number | null,
+	/**  Repeat rule; absent means the task happens once. */
+	recurrence?: RecurrenceRule_Serialize | null,
+	/**  The list this task belongs to; absent means the inbox. */
+	listId?: string | null,
+	/**
+	 *  Eisenhower axes. Kept separate and tri-state on purpose: `None` is "the
+	 *  user has not said", which is what lets the urgency default be inferred
+	 *  from the due date without overwriting a deliberate choice.
+	 */
+	important?: boolean | null,
+	urgent?: boolean | null,
+	/**
+	 *  Manual position within a list. Fractional so a drag between two rows
+	 *  only writes the row that moved.
+	 */
+	sortOrder?: number | null,
+	/**  Tags applied to this task, by tag id. */
+	tagIds: string[],
+	/**  Checklist inside the task; the order of the vector is the display order. */
+	subtasks: Subtask[],
+	/**  Files and links hanging off the task. */
+	attachments: Attachment_Serialize[],
+	/**  Tasks that must be done before this one. */
+	dependsOn: string[],
+};
+
+export type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+
+/**
+ *  Why a single write did not land, for the commands that write one todo.
+ * 
+ *  It carries the same `permanent` split as `RejectedWrite`, because the
+ *  caller's decision is the same one: a write refused for good must not be
+ *  parked in the journal, or the user is promised a retry that can never
+ *  succeed — and told so by a banner — while the entry quietly waits to be
+ *  discarded on the next start.
+ */
+export type WriteRejection = {
+	error: string,
+	permanent: boolean,
 };
 
 /* Tauri Specta runtime */
