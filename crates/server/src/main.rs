@@ -11,7 +11,9 @@ use todo_server::{
     backup::{
         self, BackupPolicy, DEFAULT_BACKUP_DIRECTORY, DEFAULT_INTERVAL_SECONDS, DEFAULT_KEEP,
     },
-    create_router, SyncService, SyncStore,
+    create_router,
+    health::{self, HealthService, DEFAULT_INTERVAL_SECONDS as DEFAULT_HEALTH_INTERVAL_SECONDS},
+    SyncService, SyncStore,
 };
 
 /// Where the sync log lives when `DATABASE_PATH` says nothing. A single file
@@ -104,6 +106,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|value| value.parse::<usize>())
         .transpose()?
         .unwrap_or(DEFAULT_KEEP);
+    let health_interval_seconds = env::var("HEALTH_INTERVAL_SECONDS")
+        .ok()
+        .map(|value| value.parse::<u64>())
+        .transpose()?
+        .unwrap_or(DEFAULT_HEALTH_INTERVAL_SECONDS);
 
     let store = SyncStore::open(&database_path)?;
     tracing::info!(path = %database_path.display(), "sync log opened");
@@ -131,11 +138,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // The watch is what makes an alert reach a self-hosted server's operator
+    // without anything else installed: the log line comes out whether or not
+    // `/v1/health` is ever asked.
+    let health_service = Arc::new(HealthService::new(Arc::clone(&sync_service)));
+    if health_interval_seconds == 0 {
+        tracing::warn!(
+            "HEALTH_INTERVAL_SECONDS is 0: alerts will only be noticed by whoever asks /v1/health"
+        );
+    } else {
+        health::spawn_watch(
+            Arc::clone(&health_service),
+            Duration::from_secs(health_interval_seconds),
+        );
+        tracing::info!(
+            interval_seconds = health_interval_seconds,
+            "health watch started"
+        );
+    }
+
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let address = listener.local_addr()?;
 
     tracing::info!(%address, "todo Axum server listening");
-    axum::serve(listener, create_router(sync_service, cors_origin)).await?;
+    axum::serve(
+        listener,
+        create_router(sync_service, health_service, cors_origin),
+    )
+    .await?;
 
     Ok(())
 }

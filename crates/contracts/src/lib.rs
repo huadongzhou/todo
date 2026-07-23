@@ -558,6 +558,133 @@ pub struct HealthResponse {
     pub time: String,
 }
 
+/// What the server can say about itself: whether it is serving, how the sync
+/// requests it has served have been going, and what the log has been unable to
+/// read.
+///
+/// `HealthResponse` above stays what it is — the liveness answer the app asks
+/// for before syncing, which must not grow or change shape for a monitoring
+/// need. This is the operator's view, served separately.
+#[derive(Clone, Debug, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HealthReport {
+    pub status: HealthStatus,
+    pub service: String,
+    pub time: String,
+    pub uptime_seconds: u64,
+    pub sync: SyncHealth,
+    pub log: LogHealth,
+    /// The concerns that are open right now, oldest first. Empty is the answer
+    /// an operator wants to see.
+    pub alerts: Vec<HealthAlert>,
+}
+
+/// How well the server is doing what it is for.
+///
+/// `Degraded` is "worth looking at, still serving"; `Unhealthy` is "the answers
+/// it gives cannot be trusted", which is the one a probe should act on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS, Type)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum HealthStatus {
+    Ok,
+    Degraded,
+    Unhealthy,
+}
+
+/// How sync requests have been going, over a window and over the whole run.
+///
+/// Latencies are whole request timings, taken around the service call: the
+/// durable commit and the wait for the single connection are inside them,
+/// because a device waiting for its operations to be accepted waits for both.
+#[derive(Clone, Debug, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SyncHealth {
+    /// How far back the windowed numbers below reach.
+    pub window_seconds: u64,
+    pub requests: u64,
+    /// Requests the server could not serve — the log refused them. These are
+    /// the server's own failures, unlike `rejections`.
+    pub failures: u64,
+    /// Requests refused because what they carried was not acceptable. A device
+    /// sending nonsense is not the server being unwell.
+    pub rejections: u64,
+    pub average_millis: f64,
+    pub slowest_millis: f64,
+    /// The longest a request waited for the log's single connection before it
+    /// could start. This is what separates "the disk is slow" from "requests
+    /// are queueing behind each other".
+    pub lock_wait_slowest_millis: f64,
+    pub requests_total: u64,
+    pub failures_total: u64,
+}
+
+/// What the log itself has to say.
+#[derive(Clone, Debug, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct LogHealth {
+    /// Whether the log answered when it was last looked at.
+    pub reachable: bool,
+    /// Whether the look found the connection in use and did not wait for it.
+    /// Busy is not unwell: it is what a server under load looks like.
+    pub busy: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub latest_revision: Option<SyncCursor>,
+    /// Rows no reading could make sense of, so devices never receive them.
+    pub unreadable_rows: RowFaults,
+    /// Rows served without the fields this build has no name for — what a
+    /// rolled back binary looks like from the log's side.
+    pub partly_read_rows: RowFaults,
+}
+
+/// A count of rows with something wrong with them, told so it can be acted on:
+/// how many distinct rows, when the first and the newest turned up, and what
+/// the newest one was.
+#[derive(Clone, Debug, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct RowFaults {
+    /// Distinct rows met since the process started, counted once each however
+    /// often they are read.
+    pub rows: u64,
+    /// How many times such a row has been read, which is the number a log line
+    /// per read would have produced.
+    pub reads: u64,
+    /// Distinct rows first met inside the window — the answer to "is this
+    /// still spreading", as opposed to "how much of it is there".
+    pub new_in_window: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub first_seen_at: Option<String>,
+    /// When the most recently discovered distinct row turned up. A number that
+    /// keeps moving is a fault that is still spreading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub newest_seen_at: Option<String>,
+    /// The most recently discovered row, in one line: which revision, which
+    /// field, and what was wrong with it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub newest: Option<String>,
+}
+
+/// One open concern.
+#[derive(Clone, Debug, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HealthAlert {
+    pub name: String,
+    pub severity: HealthStatus,
+    /// When it started, so an operator can tell a fresh problem from one that
+    /// has been open all day.
+    pub since: String,
+    pub detail: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContractValidationError {
     DeleteHasPatch,

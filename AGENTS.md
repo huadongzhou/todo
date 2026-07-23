@@ -121,7 +121,7 @@ flowchart LR
 
 - 新增接口按依赖方向落层：DTO 与校验先进 `crates/contracts/`（serde 解码，派生 `ts_rs::TS` 导出 TypeScript bindings），纯规则进 `crates/domain/`（不得依赖 Tauri、HTTP 或数据库），`crates/server/` 只加 service 与 handler，以 `/v1/` 前缀注册进 `create_router`。
 - contracts DTO 统一派生 `Clone, Debug, Deserialize, Serialize, TS, Type`，标注 `#[serde(rename_all = "camelCase", deny_unknown_fields)]` 与 `#[ts(rename_all = "camelCase")]`；可选字段加 `#[serde(default, skip_serializing_if = "Option::is_none")]` 与 `#[ts(optional)]`（允许写入 null 的用 `#[ts(optional = nullable)]`）；校验作为契约方法就近实现（如 `validate() -> Result<(), ContractValidationError>`）。
-- contracts 的枚举优先保持无载荷变体；确需带载荷时必须同步复核 `crates/server/` 的 `patch_from_json` 未知字段放宽路径——该路径靠 `deny_unknown_fields` 在读值前拒名字来定位未知字段，带载荷变体内部够不着，会让未知字段退回「整行静默跳过」或被 serde 静默忽略。
+- contracts 不得使用 `#[serde(flatten)]`，枚举优先保持无载荷变体；确需带载荷时必须同步复核 `crates/server/` 的 `patch_from_json` 未知字段放宽路径——该路径靠 serde 派生代码在 `deserialize_struct` 交出的 `FIELDS` 表筛掉本 build 叫不出名字的键，flatten 的类型不交出该表、带载荷变体内部也够不着，两者都会让未知字段退回「整行静默跳过」或被 serde 静默忽略，服务端二进制回滚时即表现为整行数据读不回。
 - handler 只做提取与编排，业务逻辑放独立 service（如 `SyncService`）；共享状态以 `Arc` + `Mutex` 经 `with_state` 注入；Axum 路由、CORS 与服务逻辑按功能模块组织。
 - 依赖方向单向：server → domain → contracts，不得反向引用；contracts 变更后必须重跑 `pnpm run types:generate` 并同步前端调用方。
 - 新行为补测试，`cargo test --workspace` 通过后才算完成。

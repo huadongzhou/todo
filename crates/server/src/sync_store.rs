@@ -1,11 +1,14 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use rusqlite::{params, Connection, ErrorCode, OpenFlags, OptionalExtension, Row};
 use serde::de::{DeserializeSeed, Error as _, IntoDeserializer, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use todo_contracts::{SyncCursor, SyncOperationKind, TodoPatch, TodoSyncChange};
+
+use crate::metrics::LogObservations;
 
 /// Server-side SQLite storage for the sync log.
 ///
@@ -21,6 +24,8 @@ use todo_contracts::{SyncCursor, SyncOperationKind, TodoPatch, TodoSyncChange};
 /// refuses to start instead.
 pub struct SyncStore {
     connection: Mutex<Connection>,
+    /// What reading and locking this file has cost, kept where it happens.
+    observations: LogObservations,
 }
 
 /// Revision of the server table layout, stamped into `PRAGMA user_version`.
@@ -126,34 +131,42 @@ fn kind_from_text(value: &str) -> Option<SyncOperationKind> {
     }
 }
 
-/// The first field name a reading met that the struct it was reading into does
-/// not have, and the route to the object that held it.
-///
-/// The route is empty for the patch itself and `["subtasks", "0"]` for the
-/// first subtask, so the name can be dropped from exactly where it was found
-/// rather than from every object that happens to use it.
-type UnknownField = RefCell<Option<(Vec<String>, String)>>;
+/// What one watched reading found the type it was reading into could not take.
+#[derive(Default)]
+struct Reading {
+    /// Every field name met that the type at that spot has no place for, with
+    /// the route to the object that held it, in the order they were met.
+    ///
+    /// The route is empty for the patch itself and `["subtasks", "0"]` for the
+    /// first subtask, so a name is dropped from exactly where it was found
+    /// rather than from every object that happens to use it.
+    unknown: Vec<(Vec<String>, String)>,
+    /// Where the reading gave up over a value it could not use. This is what
+    /// actually keeps a row from being served, so it is what a skipped row is
+    /// reported by.
+    unusable: Option<String>,
+}
 
-/// A `serde_json::Value` read exactly the way serde reads it, with the first
-/// field name the target type has no place for noted down.
+/// A `serde_json::Value` read exactly the way serde reads it, noting the field
+/// names the target type has no place for and where it gave up.
 ///
 /// Which names a build knows is a question only serde can answer, and it
-/// answers it in one spot: the derived `Deserialize` of a struct with
-/// `deny_unknown_fields` refuses the *key* of a field it does not have, before
-/// the value is ever looked at. A key the seed refuses is therefore a name this
-/// build cannot place — at whatever depth the object sits, because the same
-/// refusal happens inside a subtask or a recurrence rule as on the patch
-/// itself. Keeping the note rather than a list of field names is what stops it
-/// drifting from the contract.
+/// answers it by handing the field list of each struct to
+/// `Deserializer::deserialize_struct` — the names that struct was compiled with,
+/// at whatever depth it sits. Reading the list there rather than keeping one
+/// here is what stops it drifting from the contract, and taking it before the
+/// keys are offered is what lets one pass collect every unplaceable name
+/// instead of stopping at the first (a seed is consumed by the key it refuses,
+/// so a refusal cannot be resumed).
 ///
-/// Nothing is skipped or repaired here. The note is a location; the caller
-/// removes what it points at and reads again strictly, so the patch that comes
+/// Nothing is skipped or repaired here. The notes are locations; the caller
+/// removes what they point at and reads again strictly, so the patch that comes
 /// out is one plain serde produced.
 struct Watched<'a> {
     value: serde_json::Value,
     /// Route from the patch to this value.
     path: Vec<String>,
-    found: &'a UnknownField,
+    reading: &'a RefCell<Reading>,
 }
 
 impl<'de> Deserializer<'de> for Watched<'_> {
@@ -163,23 +176,23 @@ impl<'de> Deserializer<'de> for Watched<'_> {
     where
         V: Visitor<'de>,
     {
-        match self.value {
-            serde_json::Value::Object(fields) => visitor.visit_map(WatchedMap {
-                fields: fields.into_iter(),
-                pending: None,
-                path: self.path,
-                found: self.found,
-            }),
-            serde_json::Value::Array(items) => visitor.visit_seq(WatchedSeq {
-                items: items.into_iter(),
-                index: 0,
-                path: self.path,
-                found: self.found,
-            }),
-            // A scalar holds no names, so there is nothing to watch and
-            // serde_json reads it itself.
-            scalar => Deserializer::deserialize_any(scalar, visitor),
-        }
+        // Without a field list there is nothing to compare a name against, so
+        // the fall-back is the older behaviour: offer every key and note the
+        // one the seed refuses. Only a struct that flattens another would come
+        // through here; the contract has none.
+        self.read(None, visitor)
+    }
+
+    fn deserialize_struct<V>(
+        self,
+        _name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        self.read(Some(fields), visitor)
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -214,17 +227,49 @@ impl<'de> Deserializer<'de> for Watched<'_> {
     serde::forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
         bytes byte_buf unit unit_struct newtype_struct seq tuple tuple_struct
-        map struct identifier ignored_any
+        map identifier ignored_any
+    }
+}
+
+impl Watched<'_> {
+    fn read<'de, V>(
+        self,
+        known: Option<&'static [&'static str]>,
+        visitor: V,
+    ) -> Result<V::Value, serde_json::Error>
+    where
+        V: Visitor<'de>,
+    {
+        match self.value {
+            serde_json::Value::Object(fields) => visitor.visit_map(WatchedMap {
+                fields: fields.into_iter(),
+                known,
+                pending: None,
+                path: self.path,
+                reading: self.reading,
+            }),
+            serde_json::Value::Array(items) => visitor.visit_seq(WatchedSeq {
+                items: items.into_iter(),
+                index: 0,
+                path: self.path,
+                reading: self.reading,
+            }),
+            // A scalar holds no names, so there is nothing to watch and
+            // serde_json reads it itself.
+            scalar => Deserializer::deserialize_any(scalar, visitor),
+        }
     }
 }
 
 struct WatchedMap<'a> {
     fields: serde_json::map::IntoIter,
+    /// The names the type being read here was compiled with, when it said.
+    known: Option<&'static [&'static str]>,
     /// The entry whose key was just accepted, waiting for its value to be
     /// asked for.
     pending: Option<(String, serde_json::Value)>,
     path: Vec<String>,
-    found: &'a UnknownField,
+    reading: &'a RefCell<Reading>,
 }
 
 impl<'de> MapAccess<'de> for WatchedMap<'_> {
@@ -234,8 +279,22 @@ impl<'de> MapAccess<'de> for WatchedMap<'_> {
     where
         K: DeserializeSeed<'de>,
     {
-        let Some((name, value)) = self.fields.next() else {
-            return Ok(None);
+        // A name this type has no field for is noted and passed over, so the
+        // reading carries on and meets the rest of them. What it produces is
+        // thrown away — only the notes are used.
+        let (name, value) = loop {
+            let Some(entry) = self.fields.next() else {
+                return Ok(None);
+            };
+            match self.known {
+                Some(known) if !known.contains(&entry.0.as_str()) => {
+                    self.reading
+                        .borrow_mut()
+                        .unknown
+                        .push((self.path.clone(), entry.0));
+                }
+                _ => break entry,
+            }
         };
 
         let key: serde::de::value::StrDeserializer<'_, Self::Error> =
@@ -246,13 +305,12 @@ impl<'de> MapAccess<'de> for WatchedMap<'_> {
                 Ok(Some(key))
             }
             Err(error) => {
-                // A name was refused rather than a value: the struct being read
-                // has no field by it. The first one is kept because the reading
-                // stops here and starts over once it has been dropped.
-                let mut found = self.found.borrow_mut();
-                if found.is_none() {
-                    *found = Some((self.path.clone(), name));
-                }
+                // The name was in the field list and refused anyway, which is
+                // only reachable for a type that did not give one.
+                self.reading
+                    .borrow_mut()
+                    .unknown
+                    .push((self.path.clone(), name));
                 Err(error)
             }
         }
@@ -272,9 +330,10 @@ impl<'de> MapAccess<'de> for WatchedMap<'_> {
         path.push(name);
         seed.deserialize(Watched {
             value,
-            path,
-            found: self.found,
+            path: path.clone(),
+            reading: self.reading,
         })
+        .inspect_err(|_| note_unusable(self.reading, &path))
     }
 }
 
@@ -282,7 +341,7 @@ struct WatchedSeq<'a> {
     items: std::vec::IntoIter<serde_json::Value>,
     index: usize,
     path: Vec<String>,
-    found: &'a UnknownField,
+    reading: &'a RefCell<Reading>,
 }
 
 impl<'de> SeqAccess<'de> for WatchedSeq<'_> {
@@ -301,10 +360,21 @@ impl<'de> SeqAccess<'de> for WatchedSeq<'_> {
         self.index += 1;
         seed.deserialize(Watched {
             value: item,
-            path,
-            found: self.found,
+            path: path.clone(),
+            reading: self.reading,
         })
+        .inspect_err(|_| note_unusable(self.reading, &path))
         .map(Some)
+    }
+}
+
+/// Records `path` as where the reading gave up, unless somewhere deeper already
+/// did. The innermost reading fails first, so the first note is the closest one
+/// to the value at fault.
+fn note_unusable(reading: &RefCell<Reading>, path: &[String]) {
+    let mut reading = reading.borrow_mut();
+    if reading.unusable.is_none() {
+        reading.unusable = Some(path.join("."));
     }
 }
 
@@ -333,6 +403,27 @@ fn remove_field(value: &mut serde_json::Value, path: &[String], name: &str) -> b
     }
 }
 
+/// How many names of a list a log line carries before it starts counting them
+/// instead.
+///
+/// A patch may hold two hundred subtasks and a name from a newer build in each,
+/// so the whole list is a line no one can read past. The first few say what
+/// kind of field it is, which is what an operator needs to decide whether to
+/// roll forward.
+const NAMES_IN_A_LINE: usize = 5;
+
+/// A list of field names, cut to what a line can hold.
+fn named(fields: &[String]) -> String {
+    if fields.len() <= NAMES_IN_A_LINE {
+        return fields.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        fields[..NAMES_IN_A_LINE].join(", "),
+        fields.len() - NAMES_IN_A_LINE
+    )
+}
+
 /// How a dropped field is named in the log: `focusMinutes` for one on the patch
 /// itself, `subtasks.0.note` for one inside the first subtask.
 fn field_path(path: &[String], name: &str) -> String {
@@ -353,12 +444,11 @@ fn field_path(path: &[String], name: &str) -> String {
 /// `next_cursor` still counts them, which is worse than a delay: the device
 /// advances its cursor past changes it never received and never asks again.
 ///
-/// The strict reading is therefore tried first. When it fails, the reading is
-/// repeated under `Watched`, which notes where a name this build cannot place
-/// sits; that name is dropped and the strict reading tried again, until it
-/// succeeds or there is no such name left to blame. The patch handed back is
-/// always one a strict reading produced — the watched pass only ever points at
-/// a name.
+/// The strict reading is therefore tried first. When it fails, the bytes are
+/// read once under `Watched`, which notes every name this build cannot place
+/// and where the reading gave up; those names are dropped and the strict
+/// reading is tried again, once. The patch handed back is always one a strict
+/// reading produced — the watched pass only ever points at names.
 ///
 /// Fields that are known but carry unusable values stay in, so such a row still
 /// fails: degrading "set the title to <garbage>" into "leave the title alone"
@@ -369,43 +459,99 @@ fn field_path(path: &[String], name: &str) -> String {
 /// Dropping is only about this build's answer. The row keeps the bytes it was
 /// written with, so rolling forward again serves the whole patch to every
 /// device whose cursor is still behind it.
-fn patch_from_json(raw: &str) -> Result<(TodoPatch, Vec<String>), serde_json::Error> {
+fn patch_from_json(raw: &str) -> Result<(TodoPatch, Vec<String>), PatchFault> {
     let strict = match serde_json::from_str::<TodoPatch>(raw) {
         Ok(patch) => return Ok((patch, Vec::new())),
         Err(error) => error,
     };
 
     let Ok(mut fields) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return Err(strict);
+        // Not JSON at all, so there is nothing to look through and the strict
+        // error is the whole story.
+        return PatchFault::at(None, strict, Vec::new());
     };
 
-    let mut dropped = Vec::new();
-    loop {
-        match serde_json::from_value::<TodoPatch>(fields.clone()) {
-            Ok(patch) if !dropped.is_empty() => return Ok((patch, dropped)),
-            // Nothing had to be dropped, so the strict reading of the same
-            // bytes should have worked; a disagreement between the two is not
-            // something to settle by guessing.
-            Ok(_) => return Err(strict),
-            Err(_) => {}
-        }
+    let reading = RefCell::new(Reading::default());
+    let _ = TodoPatch::deserialize(Watched {
+        value: fields.clone(),
+        path: Vec::new(),
+        reading: &reading,
+    });
+    let Reading { unknown, unusable } = reading.into_inner();
 
-        let found = UnknownField::new(None);
-        let _ = TodoPatch::deserialize(Watched {
-            value: fields.clone(),
-            path: Vec::new(),
-            found: &found,
-        });
-
-        // No unplaceable name means the reading failed over a field this build
-        // does know, and guessing what it should have said is not on the table.
-        let Some((path, name)) = found.into_inner() else {
-            return Err(strict);
-        };
-        if !remove_field(&mut fields, &path, &name) {
-            return Err(strict);
+    let mut dropped = Vec::with_capacity(unknown.len());
+    for (path, name) in &unknown {
+        if remove_field(&mut fields, path, name) {
+            dropped.push(field_path(path, name));
         }
-        dropped.push(field_path(&path, &name));
+    }
+
+    if dropped.is_empty() {
+        // Nothing here is unplaceable, so the reading failed over a field this
+        // build does know, and guessing what it should have said is not on the
+        // table.
+        return PatchFault::at(unusable, strict, dropped);
+    }
+
+    match serde_json::from_value::<TodoPatch>(fields) {
+        Ok(patch) => Ok((patch, dropped)),
+        Err(reason) => PatchFault::at(unusable, reason, dropped),
+    }
+}
+
+/// Why a stored patch could not be read, in the terms the operator needs.
+///
+/// The field and the reason are the ones that actually stopped the reading, not
+/// the first thing the strict pass tripped over: a row holding both a name from
+/// a newer build and a value this one cannot use reads as a compatibility
+/// problem and is not one, and an operator who rolls forward on that reading
+/// finds the row still unreadable. Names that were dropped along the way are
+/// reported after it, as context rather than as the cause.
+#[derive(Debug)]
+pub struct PatchFault {
+    /// Which field the reading gave up at, when it could name one.
+    pub field: Option<String>,
+    pub reason: serde_json::Error,
+    pub dropped: Vec<String>,
+}
+
+impl PatchFault {
+    fn at<T>(
+        field: Option<String>,
+        reason: serde_json::Error,
+        dropped: Vec<String>,
+    ) -> Result<T, Self> {
+        Err(Self {
+            field,
+            reason,
+            dropped,
+        })
+    }
+
+    /// The field at fault, or a stand-in when serde named no field — a
+    /// duplicated key or bytes that are not JSON belong to the patch as a
+    /// whole.
+    fn field(&self) -> &str {
+        self.field.as_deref().unwrap_or("the patch itself")
+    }
+}
+
+impl std::fmt::Display for PatchFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} is not readable: {}",
+            self.field(),
+            self.reason
+        )?;
+        if !self.dropped.is_empty() {
+            write!(
+                formatter,
+                " (after dropping {} this build cannot name)",
+                named(&self.dropped)
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -417,28 +563,50 @@ fn patch_from_json(raw: &str) -> Result<(TodoPatch, Vec<String>), serde_json::Er
 /// misreports the operation to every device that pulls it. The row is skipped
 /// and said out loud instead — and skipping costs no data, because the log is
 /// append-only and nothing ever rewrites the bytes that were not understood.
-fn read_change(row: &Row<'_>) -> Result<Option<TodoSyncChange>, rusqlite::Error> {
+///
+/// Said out loud once, though. A row that cannot be read is met again on every
+/// pull from a cursor below it, so a line per read buries the one thing worth
+/// hearing — that another row has gone bad — under repetitions of the rows
+/// already known. `observations` is what makes them countable instead: the
+/// first sighting is logged, the rest are counted, and `/v1/health` carries how
+/// many there are, since when, and whether more keep turning up.
+fn read_change(
+    row: &Row<'_>,
+    observations: &LogObservations,
+) -> Result<Option<TodoSyncChange>, rusqlite::Error> {
     let stored_revision: i64 = row.get("revision")?;
     let operation_id: String = row.get("operation_id")?;
     let kind_text: String = row.get("kind")?;
     let stored_patch: Option<String> = row.get("patch")?;
 
     let Ok(revision) = SyncCursor::try_from(stored_revision) else {
-        tracing::warn!(
-            revision = stored_revision,
-            %operation_id,
-            "skipping a sync log row whose revision is out of range"
-        );
+        if observations.note_unreadable(
+            stored_revision,
+            format!("revision {stored_revision} is out of the range devices can ask for"),
+        ) {
+            tracing::warn!(
+                revision = stored_revision,
+                %operation_id,
+                "skipping a sync log row whose revision is out of range (once per row; the count \
+                 is in /v1/health)"
+            );
+        }
         return Ok(None);
     };
 
     let Some(kind) = kind_from_text(&kind_text) else {
-        tracing::warn!(
-            revision,
-            %operation_id,
-            kind = %kind_text,
-            "skipping a sync log row with an unreadable kind"
-        );
+        if observations.note_unreadable(
+            stored_revision,
+            format!("revision {revision}: {kind_text} names neither an upsert nor a delete"),
+        ) {
+            tracing::warn!(
+                revision,
+                %operation_id,
+                kind = %kind_text,
+                "skipping a sync log row with an unreadable kind (once per row; the count is in \
+                 /v1/health)"
+            );
+        }
         return Ok(None);
     };
 
@@ -446,23 +614,40 @@ fn read_change(row: &Row<'_>) -> Result<Option<TodoSyncChange>, rusqlite::Error>
         None => None,
         Some(raw) => match patch_from_json(&raw) {
             Ok((patch, unknown)) => {
-                if !unknown.is_empty() {
+                if !unknown.is_empty()
+                    && observations.note_partly_read(
+                        stored_revision,
+                        format!("revision {revision}: dropped {}", named(&unknown)),
+                    )
+                {
                     tracing::warn!(
                         revision,
                         %operation_id,
-                        fields = %unknown.join(", "),
-                        "serving a sync log row without the patch fields this build cannot name"
+                        fields = %named(&unknown),
+                        "serving a sync log row without the patch fields this build cannot name \
+                         (once per row; the count is in /v1/health)"
                     );
                 }
                 Some(patch)
             }
-            Err(error) => {
-                tracing::warn!(
-                    revision,
-                    %operation_id,
-                    %error,
-                    "skipping a sync log row with an unreadable patch"
-                );
+            Err(fault) => {
+                if observations
+                    .note_unreadable(stored_revision, format!("revision {revision}: {fault}"))
+                {
+                    // The field and the reason are the ones that stopped the
+                    // reading; the names dropped on the way are listed after
+                    // them so nobody reads a rollback into a row that is simply
+                    // damaged.
+                    tracing::warn!(
+                        revision,
+                        %operation_id,
+                        field = %fault.field(),
+                        error = %fault.reason,
+                        dropped = %named(&fault.dropped),
+                        "skipping a sync log row with an unreadable patch (once per row; the count \
+                         is in /v1/health)"
+                    );
+                }
                 return Ok(None);
             }
         },
@@ -517,9 +702,55 @@ impl SyncStore {
     pub fn open(path: &Path) -> Result<Self, SyncStoreError> {
         let connection = Connection::open(path)?;
         initialise(&connection)?;
-        Ok(Self {
+        Ok(Self::over(connection))
+    }
+
+    fn over(connection: Connection) -> Self {
+        Self {
             connection: Mutex::new(connection),
-        })
+            observations: LogObservations::default(),
+        }
+    }
+
+    /// What reading this log has cost and what it has been unable to read.
+    pub fn observations(&self) -> &LogObservations {
+        &self.observations
+    }
+
+    /// Narrows how far back those observations reach.
+    ///
+    /// The couple of minutes they reach by default is what makes an alert able
+    /// to clear on its own — and what makes asserting that it did too slow to
+    /// be worth a test, which is what this is for.
+    pub fn watch_within(&mut self, window: std::time::Duration) {
+        self.observations = LogObservations::new(window);
+    }
+
+    /// Looks at the log without waiting for it.
+    ///
+    /// A health check that waits for the connection is a health check that
+    /// hangs for as long as the request in front of it, which on a server under
+    /// load is exactly when it is asked. Finding the connection in use is an
+    /// answer in itself — the server is busy, not unwell — so the probe reports
+    /// that and moves on.
+    pub fn probe(&self) -> LogProbe {
+        let connection = match self.connection.try_lock() {
+            Ok(connection) => connection,
+            Err(std::sync::TryLockError::WouldBlock) => return LogProbe::Busy,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return LogProbe::Failed(SyncStoreError::Poisoned)
+            }
+        };
+
+        // A plain read outside `with_log`: no revision is handed out here, so
+        // there is nothing for a transaction to make atomic.
+        match connection.query_row(SELECT_LATEST_REVISION, [], |row| row.get::<_, i64>(0)) {
+            Ok(stored) => match SyncCursor::try_from(stored) {
+                Ok(latest_revision) => LogProbe::Ready { latest_revision },
+                Err(_) => LogProbe::Failed(SyncStoreError::UnusableRevision(stored)),
+            },
+            Err(error) => LogProbe::Failed(SyncStoreError::from(error)),
+        }
     }
 
     /// Opens an existing log read-only, creating and stamping nothing.
@@ -534,9 +765,7 @@ impl SyncStore {
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        Ok(Self {
-            connection: Mutex::new(connection),
-        })
+        Ok(Self::over(connection))
     }
 
     /// Whether something else still has the log at `path` open.
@@ -605,9 +834,7 @@ impl SyncStore {
     pub fn in_memory() -> Result<Self, SyncStoreError> {
         let connection = Connection::open_in_memory()?;
         initialise(&connection)?;
-        Ok(Self {
-            connection: Mutex::new(connection),
-        })
+        Ok(Self::over(connection))
     }
 
     /// Writes a self-contained copy of the log to `path`, which must not exist
@@ -661,16 +888,24 @@ impl SyncStore {
     where
         E: From<SyncStoreError>,
     {
+        // The wait for the lock is the queue: with one connection, concurrent
+        // requests spend it standing behind whichever one holds the file, and
+        // telling that apart from a slow disk is the difference between "buy a
+        // faster disk" and "stop serialising the requests".
+        let waiting = Instant::now();
         let mut connection = self
             .connection
             .lock()
             .map_err(|_| E::from(SyncStoreError::Poisoned))?;
+        self.observations.note_wait(waiting.elapsed());
+
         let transaction = connection
             .transaction()
             .map_err(|error| E::from(SyncStoreError::from(error)))?;
 
         let value = action(&SyncLog {
             connection: &transaction,
+            observations: &self.observations,
         })?;
 
         transaction
@@ -680,9 +915,21 @@ impl SyncStore {
     }
 }
 
+/// What a look at the log found.
+#[derive(Debug)]
+pub enum LogProbe {
+    Ready {
+        latest_revision: SyncCursor,
+    },
+    /// Something was using the connection, and the probe did not wait for it.
+    Busy,
+    Failed(SyncStoreError),
+}
+
 /// The sync log as seen from inside one transaction.
 pub struct SyncLog<'a> {
     connection: &'a Connection,
+    observations: &'a LogObservations,
 }
 
 impl SyncLog<'_> {
@@ -730,7 +977,9 @@ impl SyncLog<'_> {
     /// Everything recorded after `cursor`, oldest first.
     pub fn changes_since(&self, cursor: SyncCursor) -> Result<Vec<TodoSyncChange>, SyncStoreError> {
         let mut statement = self.connection.prepare(SELECT_CHANGES_SINCE)?;
-        let rows = statement.query_map(params![i64::from(cursor)], read_change)?;
+        let rows = statement.query_map(params![i64::from(cursor)], |row| {
+            read_change(row, self.observations)
+        })?;
         let mut changes = Vec::new();
         for change in rows {
             if let Some(change) = change? {
@@ -1243,6 +1492,167 @@ mod tests {
             .expect("read a log with a malformed patch");
 
         assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn the_reason_a_row_is_skipped_is_the_one_that_actually_stopped_it() {
+        // Both things are wrong with this row: a name only a newer build knows,
+        // and a title that is a number. Only the second one keeps it out, and
+        // an operator told about the first rolls the binary forward — which
+        // does not fix a title that is a number.
+        let fault = patch_from_json(r#"{"aaaUnknown":1,"title":42}"#)
+            .expect_err("a title that is a number is not readable");
+
+        assert_eq!(fault.field.as_deref(), Some("title"));
+        assert!(
+            fault
+                .reason
+                .to_string()
+                .contains("invalid type: integer `42`"),
+            "{}",
+            fault.reason
+        );
+        assert_eq!(fault.dropped, vec!["aaaUnknown".to_owned()]);
+        assert!(
+            fault.to_string().starts_with("title is not readable"),
+            "{fault}"
+        );
+    }
+
+    #[test]
+    fn a_value_a_level_down_is_reported_where_it_sits() {
+        let fault = patch_from_json(r#"{"subtasks":[{"id":"s1","title":"step","done":"maybe"}]}"#)
+            .expect_err("a step that is neither done nor not is not readable");
+
+        assert_eq!(fault.field.as_deref(), Some("subtasks.0.done"));
+        assert!(fault.dropped.is_empty());
+    }
+
+    #[test]
+    fn a_row_nothing_can_read_is_counted_once_however_often_it_is_read() {
+        // Every pull from a cursor below it meets it again. Counting it once
+        // and saying so once is what keeps the log readable when the thing
+        // worth hearing is that *another* row has gone bad.
+        let store = SyncStore::in_memory().expect("open an in-memory log");
+        store
+            .with_log(|log| {
+                log.append(&change("operation-1", 1))?;
+                log.append(&change("operation-2", 2))?;
+                log.connection
+                    .execute(
+                        "UPDATE sync_changes SET patch = ?1 WHERE revision = 2",
+                        params![r#"{"title":42}"#],
+                    )
+                    .map_err(SyncStoreError::from)?;
+                Ok::<_, SyncStoreError>(())
+            })
+            .expect("damage one row");
+
+        for _ in 0..3 {
+            let changes = store
+                .with_log(|log| log.changes_since(0))
+                .expect("read the log");
+            assert_eq!(changes.len(), 1, "the good row is served every time");
+        }
+
+        let faults = store.observations().unreadable_rows();
+        assert_eq!(faults.rows, 1, "one row, three readings");
+        assert_eq!(faults.reads, 3);
+        assert_eq!(faults.new_in_window, 1);
+        let newest = faults.newest.expect("the row is named");
+        assert!(newest.contains("revision 2"), "{newest}");
+        assert!(newest.contains("title"), "{newest}");
+        assert_eq!(store.observations().partly_read_rows().rows, 0);
+    }
+
+    #[test]
+    fn a_row_from_a_newer_build_is_counted_apart_from_one_nothing_can_read() {
+        // Opposite actions: this one is fixed by rolling the binary forward,
+        // the other one is not fixed by anything. Adding them up would hide
+        // which is which.
+        let store = SyncStore::in_memory().expect("open an in-memory log");
+        store
+            .with_log(|log| {
+                log.append(&change("operation-1", 1))?;
+                log.connection
+                    .execute(
+                        "UPDATE sync_changes SET patch = ?1 WHERE revision = 1",
+                        params![r#"{"title":"write it down","focusMinutes":25}"#],
+                    )
+                    .map_err(SyncStoreError::from)?;
+                Ok::<_, SyncStoreError>(())
+            })
+            .expect("write a row a newer build would have written");
+
+        for _ in 0..2 {
+            assert_eq!(
+                store
+                    .with_log(|log| log.changes_since(0))
+                    .expect("read the log")
+                    .len(),
+                1
+            );
+        }
+
+        let partly_read = store.observations().partly_read_rows();
+        assert_eq!(partly_read.rows, 1);
+        assert_eq!(partly_read.reads, 2);
+        assert!(partly_read
+            .newest
+            .expect("the row is named")
+            .contains("focusMinutes"));
+        assert_eq!(store.observations().unreadable_rows().rows, 0);
+    }
+
+    #[test]
+    fn a_line_about_a_row_does_not_carry_two_hundred_names() {
+        // A patch may hold `MAX_LIST_ENTRIES` subtasks, each with a name from a
+        // newer build. Printing all of them makes a line nobody reads past —
+        // and the first few already say what kind of field it is.
+        let many: Vec<String> = (0..200)
+            .map(|index| format!("subtasks.{index}.note"))
+            .collect();
+
+        let line = named(&many);
+
+        assert!(
+            line.starts_with("subtasks.0.note, subtasks.1.note"),
+            "{line}"
+        );
+        assert!(line.ends_with("and 195 more"), "{line}");
+        assert!(
+            line.len() < 200,
+            "{} characters is still a line",
+            line.len()
+        );
+        assert_eq!(
+            named(&["focusMinutes".to_owned()]),
+            "focusMinutes",
+            "a short list is said in full"
+        );
+    }
+
+    #[test]
+    fn a_look_at_the_log_answers_rather_than_waits() {
+        let store = SyncStore::in_memory().expect("open an in-memory log");
+        store
+            .with_log(|log| log.append(&change("operation-1", 1)))
+            .expect("append");
+
+        assert!(matches!(
+            store.probe(),
+            LogProbe::Ready { latest_revision: 1 }
+        ));
+
+        // A health check that waited for the connection would hang for as long
+        // as the request in front of it — on a loaded server, exactly when it
+        // is asked.
+        store
+            .with_log(|_| {
+                assert!(matches!(store.probe(), LogProbe::Busy));
+                Ok::<_, SyncStoreError>(())
+            })
+            .expect("hold the connection");
     }
 
     #[test]
