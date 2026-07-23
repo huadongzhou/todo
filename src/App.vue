@@ -38,6 +38,7 @@ import {
   registerShortcuts,
   unregisterShortcuts,
 } from "@/lib/shortcuts";
+import { registerUndoShortcut } from "@/lib/undo-shortcut";
 import { useSettingsStore } from "@/stores/settings";
 import { useTodoStore } from "@/stores/todos";
 
@@ -51,6 +52,7 @@ const isCard = isTodayCardWindow();
 const todoStore = useTodoStore();
 const settingsStore = useSettingsStore();
 let stopTodayCardSync: (() => void) | undefined;
+let stopUndoShortcut: (() => void) | undefined;
 /**
  * The whole draft, as one object. The page never touches a field inside it: it
  * hands it to <TodoFields> to be filled in, hands it to the store to be saved,
@@ -86,6 +88,21 @@ onMounted(async () => {
     return;
   }
 
+  // Ctrl+Z / Ctrl+Y, inside the window. An open editor gets the chord instead:
+  // there it is the input's own text undo, and taking it would undo somebody's
+  // last delete while they were trying to take back a word (the boundary the
+  // inline editor was built to, which is why nothing else on this page listens
+  // for keys at the document level).
+  stopUndoShortcut = registerUndoShortcut({
+    undo: () => {
+      todoStore.undo();
+    },
+    redo: () => {
+      todoStore.redo();
+    },
+    isSuspended: () => editingId.value !== null,
+  });
+
   const registered = await registerShortcuts({ toggleQuickAdd });
   if (registered.length > 0) activeShortcut.value = registered[0];
 
@@ -96,6 +113,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (isCard) return;
   void unregisterShortcuts();
+  stopUndoShortcut?.();
   stopTodayCardSync?.();
 });
 

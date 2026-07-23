@@ -1,6 +1,7 @@
 <script lang="ts">
 import { toInstant, toLocalDateTimeInput } from "@/lib/datetime";
 import { MAX_NOTES_CHARS } from "@/lib/native";
+import { normalizeNotes, normalizeTitle } from "@/lib/todo-normalize";
 import type { Todo } from "@/types/todo";
 
 /**
@@ -62,6 +63,24 @@ export function draftFromTodo(todo: Todo): TodoDraft {
  */
 export function isSameDraft(a: TodoDraft, b: TodoDraft): boolean {
   return (Object.keys(a) as Array<keyof TodoDraft>).every((key) => a[key] === b[key]);
+}
+
+/**
+ * The draft as it would be stored, rather than as it was typed.
+ *
+ * "Did the user change anything" has to be asked of the values the store will
+ * actually write, which is why the two text fields go through the very functions
+ * it uses. Asked of the raw text instead, a title with a space added to the end
+ * reads as an edit: it writes back the identical string, sends a sync operation
+ * carrying nothing, and files an undo entry that undoes nothing the user can
+ * see — press Ctrl+Z once and the screen does not move.
+ */
+export function normalizeDraft(draft: TodoDraft): TodoDraft {
+  return {
+    ...draft,
+    title: normalizeTitle(draft.title),
+    notes: normalizeNotes(draft.notes),
+  };
 }
 
 /**
@@ -440,11 +459,16 @@ function capState(key: string): CapState {
 }
 
 /**
- * What a rejected submit was about: the keys it named, and the draft it named
- * them in. The line it put on the page is an answer to that submit, so it goes
- * as soon as one of those keys is touched — and stays while none of them is.
+ * What a rejected submit was about: the keys it named, the draft it named them
+ * in, and the line it put on the page. That line is an answer to that submit, so
+ * it goes as soon as one of those keys is touched — and stays while none of them
+ * is.
+ *
+ * The line itself is kept for the same reason a cap keeps its own (see
+ * `retractFormAlert`): by the time the user fixes the field, the channel may be
+ * saying something else, and that sentence is not this one's to clear.
  */
-let rejection: { keys: Array<keyof TodoDraft>; draft: TodoDraft } | null = null;
+let rejection: { keys: Array<keyof TodoDraft>; draft: TodoDraft; alert: PageAlert } | null = null;
 
 /** Every control in the details region, by id, so validation can focus one. */
 const controls: Record<string, HTMLElement> = {};
@@ -580,7 +604,11 @@ function clearRejectionIfTouched(): void {
   if (!rejected) return;
   if (!rejected.keys.some((key) => pendingDraft[key] !== rejected.draft[key])) return;
   rejection = null;
-  clearFormAlert();
+  // Takes back this rejection's own line, and only while it is still the one
+  // being said: a field that has hit its limit since may have taken the channel
+  // over, and silencing that would leave a filled-up field with nothing said
+  // about it and no way to have it said again.
+  retractFormAlert(rejected.alert);
 }
 
 function onTitleInput(event: Event): void {
@@ -678,12 +706,12 @@ function validate(): boolean {
     return true;
   }
 
-  rejection = { keys: found.flatMap((failure) => failure.keys), draft: pendingDraft };
   // A field the user cannot see is a field they cannot fix.
   if (found.some((failure) => failure.inDetails)) emit("expand-details");
   // The rejection has to reach a screen reader on the Enter path too, where
   // focus never moves and a newly described-by error goes unread.
-  announceFormAlert("error", found[0].message, "transient");
+  const alert = announceFormAlert("error", found[0].message, "transient");
+  rejection = { keys: found.flatMap((failure) => failure.keys), draft: pendingDraft, alert };
 
   const target = found[0].controlId;
   if (target === titleId.value) {

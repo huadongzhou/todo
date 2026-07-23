@@ -7,6 +7,7 @@ import TodoFields, {
   draftFromTodo,
   draftHasDetails,
   isSameDraft,
+  normalizeDraft,
   type TodoDraft,
 } from "@/components/TodoFields.vue";
 import { clearFormAlert } from "@/lib/form-alert";
@@ -101,11 +102,14 @@ function finishEditing(): void {
 
 function save(): void {
   // A save that changes nothing writes nothing: an empty change would still
-  // queue an outbound sync operation, and later an undo-stack entry that undoes
-  // nothing visible. Asked before validating, because there is nothing to
-  // validate — and because a todo synced in from a build with other rules would
-  // otherwise trap its editor open, unable even to close unchanged.
-  if (isSameDraft(draft.value, openedDraft.value)) {
+  // queue an outbound sync operation, and an undo-stack entry that undoes
+  // nothing visible. Compared as the two would be *stored* rather than as they
+  // were typed — a title differing only by a trailing space is written as the
+  // same string, so counting it as a change is counting nothing as something.
+  // Asked before validating, because there is nothing to validate — and because
+  // a todo synced in from a build with other rules would otherwise trap its
+  // editor open, unable even to close unchanged.
+  if (isSameDraft(normalizeDraft(draft.value), normalizeDraft(openedDraft.value))) {
     finishEditing();
     return;
   }

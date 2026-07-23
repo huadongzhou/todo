@@ -1,9 +1,9 @@
-import { computed, ref } from "vue";
+import { computed, ref, toRaw } from "vue";
 import { defineStore } from "pinia";
 import type { Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import type { PageAlert } from "@/lib/page-alert";
-import { MAX_NOTES_CHARS, MAX_TITLE_CHARS } from "@/lib/native";
+import { normalizeNotes, normalizeTitle } from "@/lib/todo-normalize";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { buildDeleteOperation, buildUpsertOperation, recordOperation } from "@/lib/sync-engine";
@@ -43,35 +43,115 @@ export type TodoEdit = Partial<
 
 const newId = () => crypto.randomUUID();
 
+/** The fields one recorded change writes, in the shape the wire speaks. */
+type FieldChange = Pick<
+  TodoPatch,
+  | "title"
+  | "status"
+  | "completedAt"
+  | "dueDate"
+  | "reminderAt"
+  | "notes"
+  | "startDate"
+  | "startsAt"
+  | "endsAt"
+  | "estimatedMinutes"
+>;
+
 /**
- * Trims a title and caps it at the contract's limit, counted in code points to
- * match the Rust `chars().count()` check. The draft input caps at the same
- * number, so on the typed path this only trims whitespace; the cap here guards
- * the paths that build a title without going through that input (quick add,
- * future callers) so none of them can create a todo the database would refuse
- * and then lose on the next restart.
+ * One thing the user did, kept as data rather than as a pair of closures so it
+ * can be inverted, replayed and read.
+ *
+ * `change` covers completing and editing alike — both are "these fields held
+ * that, and now hold this" — which is what lets one apply path serve the two of
+ * them and their undos. A deletion cannot be said that way (there is no todo
+ * left to hold anything), so it carries the whole row and the place it sat.
  */
-function normalizeTitle(raw: string): string {
-  const trimmed = raw.trim();
-  // `Array.from` walks code points, which is exactly what `chars()` counts on
-  // the Rust side; counting UTF-16 units instead would reject titles the
-  // contract accepts.
-  const points = Array.from(trimmed);
-  return points.length > MAX_TITLE_CHARS ? points.slice(0, MAX_TITLE_CHARS).join("") : trimmed;
+type HistoryEntry =
+  | {
+      readonly kind: "change";
+      readonly id: string;
+      readonly before: FieldChange;
+      readonly after: FieldChange;
+    }
+  | { readonly kind: "delete"; readonly todo: Todo; readonly index: number }
+  | { readonly kind: "insert"; readonly todo: Todo; readonly index: number };
+
+/**
+ * How many actions can be taken back.
+ *
+ * Deep enough to cover a burst of mistakes — a handful of stray completions, a
+ * wrong delete, the edits around them — and shallow enough that the far end of
+ * the stack is still something the user would recognise, and that the snapshots
+ * a deletion keeps stay bounded (a todo carries up to 20 000 characters of
+ * notes). The stack is session-only and never persisted: an undo entry is the
+ * inverse of an action the user remembers taking, and nobody remembers across a
+ * restart — meanwhile the other devices have gone on changing the same todos.
+ */
+const UNDO_DEPTH_LIMIT = 50;
+
+/** Undoing a change means writing back what the fields held before it. */
+function inverse(entry: HistoryEntry): HistoryEntry {
+  switch (entry.kind) {
+    case "change":
+      return { kind: "change", id: entry.id, before: entry.after, after: entry.before };
+    case "delete":
+      return { kind: "insert", todo: entry.todo, index: entry.index };
+    case "insert":
+      return { kind: "delete", todo: entry.todo, index: entry.index };
+  }
+}
+
+/** Every field of a todo, as the patch that would recreate it elsewhere. */
+function patchFromTodo(todo: Todo): TodoPatch {
+  return {
+    title: todo.title,
+    status: todo.status,
+    completedAt: todo.completedAt,
+    dueDate: todo.dueDate ?? null,
+    reminderAt: todo.reminderAt ?? null,
+    notes: todo.notes ?? null,
+    startDate: todo.startDate ?? null,
+    startsAt: todo.startsAt ?? null,
+    endsAt: todo.endsAt ?? null,
+    estimatedMinutes: todo.estimatedMinutes ?? null,
+    recurrence: todo.recurrence ?? null,
+    listId: todo.listId ?? null,
+    important: todo.important ?? null,
+    urgent: todo.urgent ?? null,
+    sortOrder: todo.sortOrder ?? null,
+    tagIds: todo.tagIds,
+    subtasks: todo.subtasks,
+    attachments: todo.attachments,
+    dependsOn: todo.dependsOn,
+  };
+}
+
+/** What an edit would actually write, and what those fields held before it. */
+interface PlannedEdit {
+  readonly before: FieldChange;
+  readonly after: FieldChange;
 }
 
 /**
- * Caps a note at the contract's limit, for the same reason the title is capped
- * and with more at stake: an over-long note is refused by the server for the
- * whole sync request it travels in, and a refused operation is never
- * acknowledged — so one of them stops this device syncing at all, not just
- * itself. The notes input caps at the same number, so on the typed path this
- * does nothing.
+ * Notes one field of an edit — but only if the value would really change.
+ *
+ * The current value is handed in already read as `value ?? null` so a field that
+ * was never set compares equal to one the user left empty; the two are the same
+ * state, and telling them apart here would turn opening and saving an editor
+ * into an edit.
  */
-function normalizeNotes(raw: string | null | undefined): string | null {
-  if (raw === null || raw === undefined) return null;
-  const points = Array.from(raw);
-  return points.length > MAX_NOTES_CHARS ? points.slice(0, MAX_NOTES_CHARS).join("") : raw;
+function planField<K extends keyof FieldChange>(
+  plan: PlannedEdit,
+  key: K,
+  current: FieldChange[K],
+  next: FieldChange[K],
+): void {
+  if (next === current) return;
+  plan.after[key] = next;
+  // Never `undefined`: that travels as "the patch does not mention this field"
+  // and would leave the other devices on the value the undo just took back here.
+  plan.before[key] = current;
 }
 
 export const useTodoStore = defineStore("todos", () => {
@@ -87,6 +167,16 @@ export const useTodoStore = defineStore("todos", () => {
   const failedIds = ref<ReadonlySet<string>>(new Set());
   /** Whether the journal still holds writes the database has not taken. */
   const startupBacklog = ref(false);
+
+  /**
+   * What the user did, newest last, and what they have taken back.
+   *
+   * Plain arrays rather than refs: nothing renders them, and a reactive stack
+   * would only wrap the snapshots a deletion keeps in proxies of a todo that is
+   * no longer in the list.
+   */
+  const undoStack: HistoryEntry[] = [];
+  const redoStack: HistoryEntry[] = [];
 
   /**
    * Both lines are `standing`: nothing but the condition itself clears them,
@@ -226,98 +316,209 @@ export const useTodoStore = defineStore("todos", () => {
     return true;
   }
 
+  /**
+   * A todo's pending reminder, brought in line with what it now says.
+   *
+   * One rule for every write: a completed todo holds no reminder. Completing one
+   * used to cancel it while editing one re-armed it, so editing a task that was
+   * already done put its reminder back on the clock.
+   */
+  function refreshReminder(todo: Todo): void {
+    if (todo.status === "completed") {
+      cancelReminder(todo.id);
+      return;
+    }
+    void scheduleReminder(todo);
+  }
+
+  /**
+   * Writes a set of fields onto one todo: memory, storage, reminder, sync.
+   *
+   * The outbound operation is built from what was actually written locally,
+   * never from a caller's raw patch. Two reasons, both fatal:
+   *   - the server validates a sync request as one batch, so a single raw title
+   *     it refuses (blank, or longer than the contract allows) rejects every
+   *     operation in the request, and a rejected operation is never
+   *     acknowledged — it stays in the queue and re-poisons every later request,
+   *     which stops this device syncing for good;
+   *   - a title accepted in its raw form would still leave the other devices
+   *     showing a different string than this one does.
+   *
+   * Undo comes back through here as well, and that is deliberate: taking a
+   * change back is a new change forward, not the retraction of an operation that
+   * has already been pushed. The log is append-only and has no "never mind".
+   */
+  function applyChange(id: string, change: FieldChange): boolean {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo) return false;
+
+    Object.assign(todo, change);
+    persist(todo);
+    refreshReminder(todo);
+    void recordOperation(buildUpsertOperation(id, change, new Date().toISOString()));
+    return true;
+  }
+
+  /** Takes a todo out of the list, handing back what it was and where it sat. */
+  function deleteTodo(id: string): { todo: Todo; index: number } | null {
+    const index = items.value.findIndex((todo) => todo.id === id);
+    const removed = items.value[index];
+    if (!removed) return null;
+
+    // A copy, taken raw and taken now: the live object is reactive and would go
+    // on changing under a history entry meant to hold what was deleted.
+    const snapshot: Todo = { ...toRaw(removed) };
+    items.value.splice(index, 1);
+    forget(id);
+    cancelReminder(id);
+    void recordOperation(buildDeleteOperation(id, new Date().toISOString()));
+    return { todo: snapshot, index };
+  }
+
+  /** Puts a deleted todo back where it was, under the id it always had. */
+  function insertTodo(todo: Todo, index: number): boolean {
+    if (items.value.some((item) => item.id === todo.id)) return false;
+
+    const restored: Todo = { ...todo };
+    items.value.splice(Math.min(Math.max(index, 0), items.value.length), 0, restored);
+    persist(restored);
+    refreshReminder(restored);
+    // Every field travels: on the other devices this todo is gone, so the
+    // operation has to be able to build it again from nothing.
+    void recordOperation(
+      buildUpsertOperation(restored.id, patchFromTodo(restored), new Date().toISOString()),
+    );
+    return true;
+  }
+
+  /** Runs one entry forwards. `false` means it had nothing left to act on. */
+  function applyEntry(entry: HistoryEntry): boolean {
+    switch (entry.kind) {
+      case "change":
+        return applyChange(entry.id, entry.after);
+      case "delete":
+        return deleteTodo(entry.todo.id) !== null;
+      case "insert":
+        return insertTodo(entry.todo, entry.index);
+    }
+  }
+
+  /**
+   * Files one thing the user did.
+   *
+   * Only called once the change has actually landed, which is what makes every
+   * entry in the stack correspond to a visible difference: press undo and
+   * something changes, every time.
+   */
+  function recordHistory(entry: HistoryEntry): void {
+    undoStack.push(entry);
+    // A new action branches away from the state the redone future was written
+    // against, so that future is no longer reachable.
+    redoStack.length = 0;
+    // Full means dropping the oldest, not refusing the newest: the action a user
+    // reaches for is the one they just took, and a stack that stopped recording
+    // would lose exactly that one.
+    if (undoStack.length > UNDO_DEPTH_LIMIT) undoStack.shift();
+  }
+
+  /**
+   * Takes back the last recorded action.
+   *
+   * Entries whose todo is gone — deleted on another device since — are dropped
+   * and the one before it is tried instead: an entry that cannot change anything
+   * would spend a keypress on nothing and read as a broken undo.
+   */
+  function undo(): boolean {
+    while (undoStack.length > 0) {
+      const entry = undoStack.pop();
+      if (!entry) break;
+      if (applyEntry(inverse(entry))) {
+        redoStack.push(entry);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Does again what undo took back, under the same rule about stale entries. */
+  function redo(): boolean {
+    while (redoStack.length > 0) {
+      const entry = redoStack.pop();
+      if (!entry) break;
+      if (applyEntry(entry)) {
+        undoStack.push(entry);
+        return true;
+      }
+    }
+    return false;
+  }
+
   function update(id: string, patch: TodoEdit) {
     const todo = items.value.find((item) => item.id === id);
     if (!todo) return;
 
-    // The outbound operation is built from what was actually written locally,
-    // never from the raw patch. Two reasons, both fatal:
-    //   - the server validates a sync request as one batch, so a single raw
-    //     title it refuses (blank, or longer than the contract allows) rejects
-    //     every operation in the request, and a rejected operation is never
-    //     acknowledged — it stays in the queue and re-poisons every later
-    //     request, which stops this device syncing for good;
-    //   - a title accepted in its raw form would still leave the other devices
-    //     showing a different string than this one does.
-    //
     // `undefined` is "the edit did not touch this"; `null` is "the user emptied
     // it", and it travels as a literal `null` so the other devices empty it too.
-    const outbound: TodoPatch = {};
+    const plan: PlannedEdit = { before: {}, after: {} };
 
     if (patch.title !== undefined) {
       const normalized = normalizeTitle(patch.title);
-      if (normalized) {
-        todo.title = normalized;
-        outbound.title = normalized;
-      }
+      // An empty title is not an edit this store accepts: it keeps the old one.
+      if (normalized) planField(plan, "title", todo.title, normalized);
     }
     if (patch.dueDate !== undefined) {
-      todo.dueDate = patch.dueDate;
-      outbound.dueDate = patch.dueDate;
+      planField(plan, "dueDate", todo.dueDate ?? null, patch.dueDate);
     }
     // The reminder travels too: it is an editable field, so leaving it out of
     // the operation means a reminder changed here never reaches another device.
     if (patch.reminderAt !== undefined) {
-      todo.reminderAt = patch.reminderAt;
-      outbound.reminderAt = patch.reminderAt;
+      planField(plan, "reminderAt", todo.reminderAt ?? null, patch.reminderAt);
     }
     if (patch.notes !== undefined) {
-      todo.notes = normalizeNotes(patch.notes);
-      outbound.notes = todo.notes;
+      planField(plan, "notes", todo.notes ?? null, normalizeNotes(patch.notes));
     }
     if (patch.startDate !== undefined) {
-      todo.startDate = patch.startDate;
-      outbound.startDate = patch.startDate;
+      planField(plan, "startDate", todo.startDate ?? null, patch.startDate);
     }
     if (patch.startsAt !== undefined) {
-      todo.startsAt = patch.startsAt;
-      outbound.startsAt = patch.startsAt;
+      planField(plan, "startsAt", todo.startsAt ?? null, patch.startsAt);
     }
     if (patch.endsAt !== undefined) {
-      todo.endsAt = patch.endsAt;
-      outbound.endsAt = patch.endsAt;
+      planField(plan, "endsAt", todo.endsAt ?? null, patch.endsAt);
     }
     if (patch.estimatedMinutes !== undefined) {
-      todo.estimatedMinutes = patch.estimatedMinutes;
-      outbound.estimatedMinutes = patch.estimatedMinutes;
+      planField(plan, "estimatedMinutes", todo.estimatedMinutes ?? null, patch.estimatedMinutes);
     }
 
-    persist(todo);
-    void scheduleReminder(todo);
-    void recordOperation(buildUpsertOperation(todo.id, outbound, new Date().toISOString()));
+    // An edit that writes the values already there is not an edit: writing it
+    // anyway would queue an outbound operation carrying nothing and file an undo
+    // entry that undoes nothing the user can see.
+    if (Object.keys(plan.after).length === 0) return;
+    if (!applyChange(id, plan.after)) return;
+    recordHistory({ kind: "change", id, before: plan.before, after: plan.after });
   }
 
   function toggle(id: string) {
     const todo = items.value.find((item) => item.id === id);
     if (!todo) return;
 
-    const completed = todo.status === "open";
-    todo.status = completed ? "completed" : "open";
-    todo.completedAt = completed ? new Date().toISOString() : null;
-    const occurredAt = new Date().toISOString();
+    const completing = todo.status === "open";
+    // The instant is kept on both sides, so undoing a completion puts back the
+    // time it was originally completed at rather than inventing a new one.
+    const before: FieldChange = { status: todo.status, completedAt: todo.completedAt };
+    const after: FieldChange = {
+      status: completing ? "completed" : "open",
+      completedAt: completing ? new Date().toISOString() : null,
+    };
 
-    persist(todo);
-
-    if (completed) {
-      cancelReminder(id);
-    } else {
-      void scheduleReminder(todo);
-    }
-
-    void recordOperation(
-      buildUpsertOperation(
-        todo.id,
-        { status: todo.status, completedAt: todo.completedAt },
-        occurredAt,
-      ),
-    );
+    if (!applyChange(id, after)) return;
+    recordHistory({ kind: "change", id, before, after });
   }
 
   function remove(id: string) {
-    items.value = items.value.filter((todo) => todo.id !== id);
-    forget(id);
-    cancelReminder(id);
-    void recordOperation(buildDeleteOperation(id, new Date().toISOString()));
+    const removed = deleteTodo(id);
+    if (!removed) return;
+    recordHistory({ kind: "delete", todo: removed.todo, index: removed.index });
   }
 
   /**
@@ -422,6 +623,8 @@ export const useTodoStore = defineStore("todos", () => {
     update,
     toggle,
     remove,
+    undo,
+    redo,
     applyRemoteUpsert,
     applyRemoteDelete,
     rescheduleAll,
