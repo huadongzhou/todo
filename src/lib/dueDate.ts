@@ -24,6 +24,24 @@ export function isOverdue(dueDate: string | null | undefined, completed: boolean
   return dayDifference(dueDate) < 0;
 }
 
+/**
+ * Whether a task has not become actionable yet: its start date is a later
+ * calendar day than today's.
+ *
+ * It lives beside the due-date helpers rather than in a file of its own so it
+ * uses the same `dayDifference` they do. A second reading of "which day is it"
+ * would disagree with this one across a month boundary, a daylight-saving
+ * change, or the minute before midnight — and then a task would be in the
+ * future by one measure and not by the other.
+ *
+ * A finished task is never "not started yet", and a task without a start date
+ * has nothing to wait for.
+ */
+export function isNotStarted(startDate: string | null | undefined, completed: boolean): boolean {
+  if (!startDate || completed) return false;
+  return dayDifference(startDate) > 0;
+}
+
 export function formatDueDate(dueDate: string | null | undefined): string {
   if (!dueDate) return "";
 

@@ -16,6 +16,7 @@ import TodoItem from "@/components/TodoItem.vue";
 import type { ThemePreference } from "@/lib/appearance";
 import { canExportCalendar, exportCalendar } from "@/lib/calendar-export";
 import { formAlert } from "@/lib/form-alert";
+import { pickPageAlert, type PageAlert } from "@/lib/page-alert";
 import {
   closeTodayCard,
   openTodayCard,
@@ -148,18 +149,18 @@ const exportButtonRef = ref<ComponentPublicInstance | null>(null);
  * a store: it is not part of the todo domain, and nothing outside this view has
  * anything to say about it.
  */
-const exportAlert = ref<{ tone: "success" | "warn" | "error"; message: string } | null>(null);
+const exportAlert = ref<PageAlert | null>(null);
 
 /**
  * What the single page-level alert says.
  *
- * The form's line comes first, ahead of the storage alert it used to sit behind.
- * It is the direct answer to something the user just did and it lasts one
- * keystroke, whereas a storage alert is a standing condition that comes back by
- * itself; letting the standing one win would mean a device that once failed to
- * write could never again tell anyone why a submit was refused.
+ * The three sources are handed over as they are and ranked by `pickPageAlert`;
+ * the page does not decide which wins, because how long a line lives is known
+ * only where it was produced. The rule and the reasoning are in that module.
  */
-const pageAlert = computed(() => formAlert.value ?? todoStore.storageAlert ?? exportAlert.value);
+const pageAlert = computed(() =>
+  pickPageAlert(formAlert.value, todoStore.storageAlert, exportAlert.value),
+);
 
 // A result the user cannot see any more has nothing left to report, and leaving
 // it behind would show a stale line the next time the panel is opened.
@@ -189,7 +190,9 @@ async function runExport(): Promise<void> {
 
   try {
     const outcome = await exportCalendar(todoStore.items);
-    let result: { tone: "success" | "warn" | "error"; message: string };
+    // Every export result is `transient`: closing the settings panel ends it,
+    // whatever it says, so it never sits on top of a standing alert for long.
+    let result: PageAlert;
     if (outcome.kind === "exported") {
       lastExportedAt.value = new Date().toISOString();
       // A repeat rule the .ics standard cannot say is exported as a single
@@ -202,11 +205,15 @@ async function runExport(): Promise<void> {
       result = {
         tone: "success",
         message: `已导出 ${outcome.eventCount} 项任务：${outcome.path}。${droppedNote}`,
+        lifetime: "transient",
+        source: "export",
       };
     } else if (outcome.kind === "empty") {
       result = {
         tone: "warn",
         message: "没有可导出的任务：先给任务设置截止日或提醒时间，再试一次。",
+        lifetime: "transient",
+        source: "export",
       };
     } else {
       result = {
@@ -214,6 +221,8 @@ async function runExport(): Promise<void> {
         message: outcome.reason
           ? `导出失败：${outcome.reason}。请重试或换一个保存位置。`
           : "导出失败，请重试。",
+        lifetime: "transient",
+        source: "export",
       };
     }
     // Closing the panel clears the result; a result that arrives after the
@@ -491,6 +500,7 @@ function updateTheme(preference: ThemePreference): void {
         id-prefix="create"
         :details-open="showDetails"
         details-id="create-details"
+        @expand-details="showDetails = true"
       >
         <template #actions>
           <div class="ml-auto flex gap-2">

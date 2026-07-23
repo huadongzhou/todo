@@ -2,24 +2,44 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import type { Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
-import { MAX_TITLE_CHARS } from "@/lib/native";
+import type { PageAlert } from "@/lib/page-alert";
+import { MAX_NOTES_CHARS, MAX_TITLE_CHARS } from "@/lib/native";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { buildDeleteOperation, buildUpsertOperation, recordOperation } from "@/lib/sync-engine";
 import type { PendingWriteFlush, WriteOutcome } from "@/lib/todo-repository";
 import { todoRepository } from "@/lib/todo-repository";
 
+/**
+ * The fields a caller may set while creating a todo. Every one of them travels
+ * on to storage and to the outbound sync operation; a field added here and
+ * forgotten in either place is a field the user can fill in and then lose.
+ */
 export interface NewTodoInput {
   readonly title: string;
   readonly dueDate?: string | null;
   readonly reminderAt?: string | null;
+  readonly notes?: string | null;
+  readonly startDate?: string | null;
+  readonly startsAt?: string | null;
+  readonly endsAt?: string | null;
+  readonly estimatedMinutes?: number | null;
 }
 
-/** A durability problem the user should know about, and how loud it is. */
-export interface StorageAlert {
-  readonly tone: "warn" | "error";
-  readonly message: string;
-}
+/** The fields an edit may change. */
+export type TodoEdit = Partial<
+  Pick<
+    Todo,
+    | "title"
+    | "dueDate"
+    | "reminderAt"
+    | "notes"
+    | "startDate"
+    | "startsAt"
+    | "endsAt"
+    | "estimatedMinutes"
+  >
+>;
 
 const newId = () => crypto.randomUUID();
 
@@ -40,6 +60,20 @@ function normalizeTitle(raw: string): string {
   return points.length > MAX_TITLE_CHARS ? points.slice(0, MAX_TITLE_CHARS).join("") : trimmed;
 }
 
+/**
+ * Caps a note at the contract's limit, for the same reason the title is capped
+ * and with more at stake: an over-long note is refused by the server for the
+ * whole sync request it travels in, and a refused operation is never
+ * acknowledged — so one of them stops this device syncing at all, not just
+ * itself. The notes input caps at the same number, so on the typed path this
+ * does nothing.
+ */
+function normalizeNotes(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const points = Array.from(raw);
+  return points.length > MAX_NOTES_CHARS ? points.slice(0, MAX_NOTES_CHARS).join("") : raw;
+}
+
 export const useTodoStore = defineStore("todos", () => {
   const items = ref<Todo[]>([]);
   const activeItems = computed(() => items.value.filter((todo) => todo.status === "open"));
@@ -54,15 +88,30 @@ export const useTodoStore = defineStore("todos", () => {
   /** Whether the journal still holds writes the database has not taken. */
   const startupBacklog = ref(false);
 
-  const storageAlert = computed<StorageAlert | null>(() => {
+  /**
+   * Both lines are `standing`: nothing but the condition itself clears them,
+   * which is exactly what decides whether the page may let another line cover
+   * them (see `pickPageAlert`). Stated here rather than guessed at by the page.
+   */
+  const storageAlert = computed<PageAlert | null>(() => {
     if (failedIds.value.size > 0) {
       // "failed" now covers two causes — storage would not take the write, or
       // the contract refuses this todo for good — so the wording names both
       // instead of asserting the disk is full.
-      return { tone: "error", message: "有改动没能保存到本机，请检查内容或存储空间后重试。" };
+      return {
+        tone: "error",
+        message: "有改动没能保存到本机，请检查内容或存储空间后重试。",
+        lifetime: "standing",
+        source: "storage",
+      };
     }
     if (degradedIds.value.size > 0 || startupBacklog.value) {
-      return { tone: "warn", message: "有改动暂存在本地缓存，尚未写入数据库，重启后会自动补写。" };
+      return {
+        tone: "warn",
+        message: "有改动暂存在本地缓存，尚未写入数据库，重启后会自动补写。",
+        lifetime: "standing",
+        source: "storage",
+      };
     }
     return null;
   });
@@ -127,14 +176,20 @@ export const useTodoStore = defineStore("todos", () => {
     const normalized = normalizeTitle(typeof input === "string" ? input : input.title);
     if (!normalized) return false;
 
+    const fields: Omit<NewTodoInput, "title"> = typeof input === "string" ? {} : input;
     const todo: Todo = {
       id: newId(),
       title: normalized,
       status: "open",
       createdAt: new Date().toISOString(),
       completedAt: null,
-      dueDate: typeof input === "string" ? null : (input.dueDate ?? null),
-      reminderAt: typeof input === "string" ? null : (input.reminderAt ?? null),
+      dueDate: fields.dueDate ?? null,
+      reminderAt: fields.reminderAt ?? null,
+      notes: normalizeNotes(fields.notes),
+      startDate: fields.startDate ?? null,
+      startsAt: fields.startsAt ?? null,
+      endsAt: fields.endsAt ?? null,
+      estimatedMinutes: fields.estimatedMinutes ?? null,
       // The list-valued fields have one empty value rather than two (`[]` and
       // "not set"), so a new todo starts with the empty one; the optional
       // scalars stay absent until something sets them.
@@ -150,15 +205,20 @@ export const useTodoStore = defineStore("todos", () => {
     void recordOperation(
       buildUpsertOperation(
         todo.id,
+        // Every field the creation can carry travels with it. A field left out
+        // here is one the user can set while adding a task and never see on
+        // another device — the gap the reminder used to have on this path.
         {
           title: todo.title,
           status: todo.status,
           dueDate: todo.dueDate,
-          // The reminder travels with the creation too. Leaving it out meant a
-          // reminder set while adding the task never reached another device —
-          // the same gap `update` already had, on the sibling path.
           reminderAt: todo.reminderAt,
           completedAt: todo.completedAt,
+          notes: todo.notes,
+          startDate: todo.startDate,
+          startsAt: todo.startsAt,
+          endsAt: todo.endsAt,
+          estimatedMinutes: todo.estimatedMinutes,
         },
         todo.createdAt,
       ),
@@ -166,7 +226,7 @@ export const useTodoStore = defineStore("todos", () => {
     return true;
   }
 
-  function update(id: string, patch: Partial<Pick<Todo, "title" | "dueDate" | "reminderAt">>) {
+  function update(id: string, patch: TodoEdit) {
     const todo = items.value.find((item) => item.id === id);
     if (!todo) return;
 
@@ -179,6 +239,9 @@ export const useTodoStore = defineStore("todos", () => {
     //     request, which stops this device syncing for good;
     //   - a title accepted in its raw form would still leave the other devices
     //     showing a different string than this one does.
+    //
+    // `undefined` is "the edit did not touch this"; `null` is "the user emptied
+    // it", and it travels as a literal `null` so the other devices empty it too.
     const outbound: TodoPatch = {};
 
     if (patch.title !== undefined) {
@@ -197,6 +260,26 @@ export const useTodoStore = defineStore("todos", () => {
     if (patch.reminderAt !== undefined) {
       todo.reminderAt = patch.reminderAt;
       outbound.reminderAt = patch.reminderAt;
+    }
+    if (patch.notes !== undefined) {
+      todo.notes = normalizeNotes(patch.notes);
+      outbound.notes = todo.notes;
+    }
+    if (patch.startDate !== undefined) {
+      todo.startDate = patch.startDate;
+      outbound.startDate = patch.startDate;
+    }
+    if (patch.startsAt !== undefined) {
+      todo.startsAt = patch.startsAt;
+      outbound.startsAt = patch.startsAt;
+    }
+    if (patch.endsAt !== undefined) {
+      todo.endsAt = patch.endsAt;
+      outbound.endsAt = patch.endsAt;
+    }
+    if (patch.estimatedMinutes !== undefined) {
+      todo.estimatedMinutes = patch.estimatedMinutes;
+      outbound.estimatedMinutes = patch.estimatedMinutes;
     }
 
     persist(todo);
@@ -249,10 +332,13 @@ export const useTodoStore = defineStore("todos", () => {
   ): void {
     const existing = items.value.find((item) => item.id === todoId);
     if (existing) {
-      // Field level, one field per line: an absent key means the remote change
-      // did not touch that field, so it must keep the local value. Every field
-      // the contract carries is listed — a field left out here would silently
-      // stop syncing.
+      // Field level, one field per line. `undefined` is "the remote change did
+      // not touch this field", so the local value stands; `null` is "the user
+      // emptied it over there", and it is applied like any other value — which
+      // is why the test is `!== undefined` and never a truthiness check. The
+      // contract now carries those two apart on the wire, so this reading is
+      // finally the whole truth rather than half of it. Every field the
+      // contract has is listed: one left out would silently stop syncing.
       if (patch?.title !== undefined) existing.title = patch.title;
       if (patch?.status !== undefined) existing.status = patch.status;
       if (patch?.dueDate !== undefined) existing.dueDate = patch.dueDate;

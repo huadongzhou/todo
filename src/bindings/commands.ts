@@ -42,6 +42,8 @@ export const commands = {
 };
 
 /* Constants */
+export const MAX_NOTES_CHARS = 20000 as const;
+
 export const MAX_TITLE_CHARS = 500 as const;
 
 /* Types */

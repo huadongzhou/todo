@@ -598,7 +598,7 @@ mod tests {
                         "operation-2",
                         TodoPatch {
                             status: Some(TodoStatus::Completed),
-                            completed_at: Some("2026-07-16T09:00:00Z".to_owned()),
+                            completed_at: Some(Some("2026-07-16T09:00:00Z".to_owned())),
                             ..TodoPatch::default()
                         },
                     ),
@@ -625,7 +625,10 @@ mod tests {
             .as_ref()
             .expect("a completion patch");
         assert!(matches!(second.status, Some(TodoStatus::Completed)));
-        assert_eq!(second.completed_at.as_deref(), Some("2026-07-16T09:00:00Z"));
+        assert_eq!(
+            second.completed_at,
+            Some(Some("2026-07-16T09:00:00Z".to_owned()))
+        );
         assert!(second.title.is_none());
         // Revision order is what the device applies them in, so the later
         // operation must still come last.

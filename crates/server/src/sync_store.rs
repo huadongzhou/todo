@@ -1148,10 +1148,10 @@ mod tests {
         let mut carried = change("operation-1", 1);
         carried.patch = Some(TodoPatch {
             status: Some(todo_contracts::TodoStatus::Completed),
-            completed_at: Some("2026-07-23T10:00:00Z".to_owned()),
+            completed_at: Some(Some("2026-07-23T10:00:00Z".to_owned())),
             tag_ids: Some(vec!["tag-1".to_owned()]),
-            important: Some(true),
-            sort_order: Some(2.5),
+            important: Some(Some(true)),
+            sort_order: Some(Some(2.5)),
             ..TodoPatch::default()
         });
 
@@ -1168,16 +1168,51 @@ mod tests {
             patch.status,
             Some(todo_contracts::TodoStatus::Completed)
         ));
-        assert_eq!(patch.completed_at.as_deref(), Some("2026-07-23T10:00:00Z"));
+        assert_eq!(
+            patch.completed_at,
+            Some(Some("2026-07-23T10:00:00Z".to_owned()))
+        );
         assert_eq!(patch.tag_ids, Some(vec!["tag-1".to_owned()]));
-        assert_eq!(patch.important, Some(true));
-        assert_eq!(patch.sort_order, Some(2.5));
+        assert_eq!(patch.important, Some(Some(true)));
+        assert_eq!(patch.sort_order, Some(Some(2.5)));
         // The fields the operation did not carry must stay absent: "unchanged"
         // and "cleared" are different instructions to the merge on the device.
         assert!(patch.title.is_none());
         assert!(patch.due_date.is_none());
         assert!(patch.notes.is_none());
         assert!(patch.subtasks.is_none());
+    }
+
+    #[test]
+    fn a_patch_that_clears_a_field_still_clears_it_after_the_log() {
+        // The log is where a clear used to be lost: the patch was decoded into a
+        // shape that could not hold "set to nothing", re-encoded without it, and
+        // served to the other devices as "leave it alone".
+        let store = SyncStore::in_memory().expect("open an in-memory log");
+        let mut cleared = change("operation-1", 1);
+        cleared.patch = Some(TodoPatch {
+            due_date: Some(None),
+            reminder_at: Some(None),
+            notes: Some(None),
+            estimated_minutes: Some(None),
+            ..TodoPatch::default()
+        });
+
+        let read_back = store
+            .with_log(|log| {
+                log.append(&cleared)?;
+                log.changes_since(0)
+            })
+            .expect("round trip the patch")
+            .remove(0);
+
+        let patch = read_back.patch.expect("the patch survives");
+        assert_eq!(patch.due_date, Some(None));
+        assert_eq!(patch.reminder_at, Some(None));
+        assert_eq!(patch.notes, Some(None));
+        assert_eq!(patch.estimated_minutes, Some(None));
+        // A field the operation never mentioned stays unmentioned.
+        assert_eq!(patch.start_date, None);
     }
 
     #[test]
@@ -1366,7 +1401,10 @@ mod tests {
                     assert_eq!(subtasks[0].title, "step");
                 }
                 "recurrence.weekOfMonth" => {
-                    let rule = patch.recurrence.expect("the rule survives");
+                    let rule = patch
+                        .recurrence
+                        .flatten()
+                        .expect("the rule survives");
                     assert_eq!(rule.interval, 1);
                 }
                 _ => {
@@ -1416,15 +1454,15 @@ mod tests {
         let carried = TodoPatch {
             title: Some("write it down".to_owned()),
             status: Some(todo_contracts::TodoStatus::Completed),
-            due_date: Some("2026-07-24".to_owned()),
-            completed_at: Some("2026-07-23T10:00:00Z".to_owned()),
-            reminder_at: Some("2026-07-24T09:00:00Z".to_owned()),
-            notes: Some("the details".to_owned()),
-            start_date: Some("2026-07-22".to_owned()),
-            starts_at: Some("2026-07-22T08:00:00Z".to_owned()),
-            ends_at: Some("2026-07-22T09:00:00Z".to_owned()),
-            estimated_minutes: Some(30),
-            recurrence: Some(todo_contracts::RecurrenceRule {
+            due_date: Some(Some("2026-07-24".to_owned())),
+            completed_at: Some(Some("2026-07-23T10:00:00Z".to_owned())),
+            reminder_at: Some(Some("2026-07-24T09:00:00Z".to_owned())),
+            notes: Some(Some("the details".to_owned())),
+            start_date: Some(Some("2026-07-22".to_owned())),
+            starts_at: Some(Some("2026-07-22T08:00:00Z".to_owned())),
+            ends_at: Some(Some("2026-07-22T09:00:00Z".to_owned())),
+            estimated_minutes: Some(Some(30)),
+            recurrence: Some(Some(todo_contracts::RecurrenceRule {
                 frequency: todo_contracts::RecurrenceFrequency::Weekly,
                 interval: 2,
                 weekdays: vec![todo_contracts::Weekday::Monday],
@@ -1433,11 +1471,11 @@ mod tests {
                 calendar: todo_contracts::RecurrenceCalendar::Gregorian,
                 until: Some("2026-12-31".to_owned()),
                 count: Some(10),
-            }),
-            list_id: Some("list-1".to_owned()),
-            important: Some(true),
-            urgent: Some(false),
-            sort_order: Some(1.5),
+            })),
+            list_id: Some(Some("list-1".to_owned())),
+            important: Some(Some(true)),
+            urgent: Some(Some(false)),
+            sort_order: Some(Some(1.5)),
             tag_ids: Some(vec!["tag-1".to_owned()]),
             subtasks: Some(vec![todo_contracts::Subtask {
                 id: "s1".to_owned(),

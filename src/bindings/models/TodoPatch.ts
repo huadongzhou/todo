@@ -9,5 +9,12 @@ import type { TodoStatus } from "./TodoStatus";
  *
  * An absent field means "unchanged"; a present one replaces the stored value,
  * list-valued fields included (a tag set is sent whole, not as a diff).
+ *
+ * Nullable fields are `Option<Option<T>>` rather than `Option<T>` so that
+ * "leave it alone" and "clear it" are different values instead of the same one:
+ * the outer option is whether the patch mentions the field, the inner one is
+ * what it sets it to. Without the distinction every optional field could be
+ * filled in and never emptied again — a clear left home as `null`, arrived as
+ * "unchanged", and the other devices went on showing the old value.
  */
 export type TodoPatch = { title?: string, status?: TodoStatus, dueDate?: string | null, completedAt?: string | null, reminderAt?: string | null, notes?: string | null, startDate?: string | null, startsAt?: string | null, endsAt?: string | null, estimatedMinutes?: number | null, recurrence?: RecurrenceRule | null, listId?: string | null, important?: boolean | null, urgent?: boolean | null, sortOrder?: number | null, tagIds?: Array<string>, subtasks?: Array<Subtask>, attachments?: Array<Attachment>, dependsOn?: Array<string>, };

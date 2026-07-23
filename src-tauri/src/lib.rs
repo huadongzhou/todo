@@ -259,11 +259,12 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             replay_pending_writes,
             export_calendar
         ])
-        // The title is the one contract limit a user can reach by typing today,
-        // so the view layer caps its input at the same number the contract
-        // enforces. Sharing the constant keeps the two from drifting apart and
-        // recreating "the field accepts input the database then refuses".
+        // The two contract limits a user can reach by typing, so the view layer
+        // caps both inputs at the numbers the contract enforces. Sharing the
+        // constants keeps them from drifting apart and recreating "the field
+        // accepts input the database then refuses".
         .constant("MAX_TITLE_CHARS", todo_contracts::MAX_TITLE_CHARS)
+        .constant("MAX_NOTES_CHARS", todo_contracts::MAX_NOTES_CHARS)
 }
 
 #[cfg(debug_assertions)]

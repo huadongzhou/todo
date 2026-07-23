@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Check, Trash2 } from "lucide-vue-next";
+import { Check, SlidersHorizontal, Trash2 } from "lucide-vue-next";
 import Button from "@/components/ui/button/Button.vue";
 import TodoFields, {
   createEmptyDraft,
   draftFromTodo,
+  draftHasDetails,
   isSameDraft,
   type TodoDraft,
 } from "@/components/TodoFields.vue";
 import { clearFormAlert } from "@/lib/form-alert";
-import { dueDateTone, formatDueDate, TONE_LABEL_CLASS } from "@/lib/dueDate";
+import { dueDateTone, formatDueDate, isNotStarted, TONE_LABEL_CLASS } from "@/lib/dueDate";
 import { useTodoStore } from "@/stores/todos";
 import type { Todo } from "@/types/todo";
 
@@ -42,8 +43,20 @@ const openedDraft = ref<TodoDraft>(createEmptyDraft());
  * is still inside the form.
  */
 const openedTitle = ref("");
+/**
+ * Whether the optional fields are showing in this row's form.
+ *
+ * Decided once, when the form opens, from whether the todo has anything to show
+ * there — a row with nothing but a title opens as a title and two buttons, which
+ * is what keeps "click the title to fix a typo" from unfolding most of a screen.
+ * After that it is the user's to toggle: recomputing it would collapse the form
+ * under someone who has just emptied the last optional field.
+ */
+const detailsOpen = ref(false);
 
 const completed = computed(() => props.todo.status === "completed");
+/** A task whose start date has not arrived yet: set, but nothing to do about. */
+const notStarted = computed(() => isNotStarted(props.todo.startDate, completed.value));
 
 /** Fills the draft from the stored todo whenever this row opens for editing. */
 watch(
@@ -57,6 +70,9 @@ watch(
     }
     openedDraft.value = draftFromTodo(props.todo);
     draft.value = { ...openedDraft.value };
+    // Asked of the draft, never of a list of field names: the container stays
+    // ignorant of which fields exist.
+    detailsOpen.value = draftHasDetails(openedDraft.value);
     openedTitle.value = props.todo.title;
     void focusTitle();
   },
@@ -84,6 +100,16 @@ function finishEditing(): void {
 }
 
 function save(): void {
+  // A save that changes nothing writes nothing: an empty change would still
+  // queue an outbound sync operation, and later an undo-stack entry that undoes
+  // nothing visible. Asked before validating, because there is nothing to
+  // validate — and because a todo synced in from a build with other rules would
+  // otherwise trap its editor open, unable even to close unchanged.
+  if (isSameDraft(draft.value, openedDraft.value)) {
+    finishEditing();
+    return;
+  }
+
   // The store silently ignores an empty title, so a UI that let one through
   // would leave the user with a save that did nothing and said nothing. What
   // counts as valid is the field block's business; this only reads the verdict.
@@ -92,13 +118,7 @@ function save(): void {
     return;
   }
 
-  // A save that changes nothing writes nothing: an empty change would still
-  // queue an outbound sync operation, and later an undo-stack entry that undoes
-  // nothing visible.
-  if (!isSameDraft(draft.value, openedDraft.value)) {
-    todoStore.update(props.todo.id, draft.value);
-  }
-
+  todoStore.update(props.todo.id, draft.value);
   finishEditing();
 }
 
@@ -134,9 +154,24 @@ function cancel(): void {
         ref="fieldsRef"
         v-model="draft"
         :id-prefix="`todo-${todo.id}`"
-        :details-open="true"
+        :details-open="detailsOpen"
         :details-id="`todo-${todo.id}-details`"
-      />
+        @expand-details="detailsOpen = true"
+      >
+        <template #actions>
+          <Button
+            type="button"
+            variant="ghost"
+            class="ml-auto min-h-11 min-w-11 !p-2"
+            :aria-label="detailsOpen ? '收起更多选项' : '展开更多选项'"
+            :aria-expanded="detailsOpen"
+            :aria-controls="`todo-${todo.id}-details`"
+            @click="detailsOpen = !detailsOpen"
+          >
+            <SlidersHorizontal :size="20" />
+          </Button>
+        </template>
+      </TodoFields>
 
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="m-0 text-xs text-slate-500 dark:text-slate-400">Enter 保存 · Esc 取消</p>
@@ -192,13 +227,26 @@ function cancel(): void {
         >
           {{ todo.title }}
         </button>
-        <p
-          v-if="todo.dueDate"
-          class="mb-0 mt-1 inline-block rounded-md px-1.5 py-0.5 text-xs font-medium"
-          :class="TONE_LABEL_CLASS[dueDateTone(todo.dueDate, completed)]"
-        >
-          {{ formatDueDate(todo.dueDate) }}
-          <span v-if="todo.reminderAt"> · 已设提醒</span>
+        <!--
+          The badge row shows on a start date too, not only a due date: a start
+          date the user cannot see anywhere reads as a field that did nothing.
+        -->
+        <p v-if="todo.dueDate || notStarted" class="mb-0 mt-1 flex flex-wrap items-center gap-2">
+          <span
+            v-if="todo.dueDate"
+            class="inline-block rounded-md px-1.5 py-0.5 text-xs font-medium"
+            :class="TONE_LABEL_CLASS[dueDateTone(todo.dueDate, completed)]"
+          >
+            {{ formatDueDate(todo.dueDate) }}
+            <span v-if="todo.reminderAt"> · 已设提醒</span>
+          </span>
+          <span
+            v-if="notStarted"
+            class="inline-block rounded-md px-1.5 py-0.5 text-xs font-medium"
+            :class="TONE_LABEL_CLASS.normal"
+          >
+            {{ formatDueDate(todo.startDate) }}开始
+          </span>
         </p>
       </div>
       <Button

@@ -11,7 +11,11 @@ pub type SyncCursor = u32;
 /// the same limit, so the app never accepts a title storage would refuse.
 pub const MAX_TITLE_CHARS: usize = 500;
 /// Longest accepted free-text note on a todo.
-const MAX_NOTES_CHARS: usize = 20_000;
+///
+/// Public for the same reason as the title limit: notes are typed into an input
+/// too, and the view layer stops that input at this number rather than at a
+/// figure of its own.
+pub const MAX_NOTES_CHARS: usize = 20_000;
 /// Longest accepted attachment location.
 const MAX_URL_CHARS: usize = 2_048;
 /// Longest accepted list-valued field (tags, subtasks, attachments, dependencies).
@@ -278,10 +282,48 @@ pub enum Weekday {
     Sunday,
 }
 
+/// Reads and writes a patch field that may be cleared, keeping `null` apart
+/// from "not there".
+///
+/// Serde reads a nested option the way it reads a flat one — `null` becomes the
+/// outer `None`, which is the very shape a missing key already has — so the two
+/// meanings collapse before anything downstream can tell them apart. Reading the
+/// inner option and wrapping whatever it produced is what keeps them separate:
+/// `deserialize` only ever runs when the key was there, so its answer is always
+/// `Some`, and `Some(None)` is a key that was there and said `null`.
+mod present {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<T, S>(value: &Option<Option<T>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        T: Serialize,
+        S: Serializer,
+    {
+        // `skip_serializing_if` keeps an unmentioned field off the wire, so what
+        // arrives here is a mention: a value, or the `null` that clears it.
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        T::deserialize(deserializer).map(Some)
+    }
+}
+
 /// The fields one sync operation changes.
 ///
 /// An absent field means "unchanged"; a present one replaces the stored value,
 /// list-valued fields included (a tag set is sent whole, not as a diff).
+///
+/// Nullable fields are `Option<Option<T>>` rather than `Option<T>` so that
+/// "leave it alone" and "clear it" are different values instead of the same one:
+/// the outer option is whether the patch mentions the field, the inner one is
+/// what it sets it to. Without the distinction every optional field could be
+/// filled in and never emptied again — a clear left home as `null`, arrived as
+/// "unchanged", and the other devices went on showing the old value.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, TS, Type)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename_all = "camelCase")]
@@ -292,45 +334,45 @@ pub struct TodoPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub status: Option<TodoStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub due_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub completed_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub reminder_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub notes: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub start_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub starts_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub ends_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub estimated_minutes: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub recurrence: Option<RecurrenceRule>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub list_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub important: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub urgent: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub sort_order: Option<f64>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub due_date: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub completed_at: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub reminder_at: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub notes: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub start_date: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub starts_at: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub ends_at: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<u32>", optional = nullable)]
+    pub estimated_minutes: Option<Option<u32>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<RecurrenceRule>", optional = nullable)]
+    pub recurrence: Option<Option<RecurrenceRule>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub list_id: Option<Option<String>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<bool>", optional = nullable)]
+    pub important: Option<Option<bool>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<bool>", optional = nullable)]
+    pub urgent: Option<Option<bool>>,
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<f64>", optional = nullable)]
+    pub sort_order: Option<Option<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tag_ids: Option<Vec<String>>,
@@ -351,21 +393,21 @@ impl TodoPatch {
             validate_title(title)?;
         }
 
-        if let Some(notes) = &self.notes {
+        if let Some(Some(notes)) = &self.notes {
             if notes.chars().count() > MAX_NOTES_CHARS {
                 return Err(ContractValidationError::InvalidNotes);
             }
         }
 
-        if self.estimated_minutes == Some(0) {
+        if self.estimated_minutes == Some(Some(0)) {
             return Err(ContractValidationError::InvalidEstimate);
         }
 
-        if let Some(recurrence) = &self.recurrence {
+        if let Some(Some(recurrence)) = &self.recurrence {
             recurrence.validate()?;
         }
 
-        if let Some(list_id) = &self.list_id {
+        if let Some(Some(list_id)) = &self.list_id {
             validate_id(list_id)?;
         }
 
@@ -1005,5 +1047,79 @@ mod tests {
             operation.validate(),
             Err(ContractValidationError::InvalidTitle)
         );
+    }
+
+    #[test]
+    fn a_patch_tells_clearing_a_field_from_not_mentioning_it() {
+        let cleared: TodoPatch = serde_json::from_str(
+            r#"{"dueDate":null,"reminderAt":null,"notes":null,"startDate":null,
+                "startsAt":null,"endsAt":null,"estimatedMinutes":null}"#,
+        )
+        .expect("decode a patch that clears fields");
+
+        // Mentioned, and set to nothing.
+        assert_eq!(cleared.due_date, Some(None));
+        assert_eq!(cleared.reminder_at, Some(None));
+        assert_eq!(cleared.notes, Some(None));
+        assert_eq!(cleared.start_date, Some(None));
+        assert_eq!(cleared.starts_at, Some(None));
+        assert_eq!(cleared.ends_at, Some(None));
+        assert_eq!(cleared.estimated_minutes, Some(None));
+
+        let untouched: TodoPatch =
+            serde_json::from_str(r#"{"title":"still here"}"#).expect("decode a patch that does not");
+        assert_eq!(untouched.due_date, None);
+        assert_eq!(untouched.notes, None);
+        assert_eq!(untouched.estimated_minutes, None);
+    }
+
+    #[test]
+    fn a_cleared_field_survives_the_round_trip_a_stored_patch_makes() {
+        // The server stores a patch by re-encoding what it decoded, so a clear
+        // that does not survive this trip reaches no other device: it leaves as
+        // `null`, is stored as nothing, and comes back as "unchanged".
+        let raw = r#"{"title":"clear my dates","dueDate":null,"estimatedMinutes":null}"#;
+        let decoded: TodoPatch = serde_json::from_str(raw).expect("decode");
+        let encoded = serde_json::to_string(&decoded).expect("encode");
+
+        assert!(encoded.contains("\"dueDate\":null"));
+        assert!(encoded.contains("\"estimatedMinutes\":null"));
+        // A field nobody mentioned still stays off the wire entirely.
+        assert!(!encoded.contains("notes"));
+
+        let again: TodoPatch = serde_json::from_str(&encoded).expect("decode again");
+        assert_eq!(again.due_date, Some(None));
+        assert_eq!(again.estimated_minutes, Some(None));
+        assert_eq!(again.notes, None);
+    }
+
+    #[test]
+    fn a_patch_setting_a_value_is_unaffected_by_the_clearing_shape() {
+        let patch: TodoPatch = serde_json::from_str(
+            r#"{"dueDate":"2026-08-01","estimatedMinutes":30,"important":true}"#,
+        )
+        .expect("decode");
+
+        assert_eq!(patch.due_date, Some(Some("2026-08-01".to_owned())));
+        assert_eq!(patch.estimated_minutes, Some(Some(30)));
+        assert_eq!(patch.important, Some(Some(true)));
+        patch.validate().expect("a filled patch is valid");
+
+        let zero_estimate = TodoPatch {
+            estimated_minutes: Some(Some(0)),
+            ..TodoPatch::default()
+        };
+        assert_eq!(
+            zero_estimate.validate(),
+            Err(ContractValidationError::InvalidEstimate)
+        );
+        // Clearing an estimate is not setting it to zero.
+        let cleared_estimate = TodoPatch {
+            estimated_minutes: Some(None),
+            ..TodoPatch::default()
+        };
+        cleared_estimate
+            .validate()
+            .expect("clearing an estimate is valid");
     }
 }
