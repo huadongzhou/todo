@@ -50,12 +50,26 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Where this device sits, in minutes east of UTC.
+ *
+ * `getTimezoneOffset()` counts the other way (minutes west), so it is negated
+ * here once, at the boundary. The Rust side needs it because a stored instant is
+ * always UTC — `toInstant()` writes `toISOString()` — while a repeat rule ends
+ * on a *local* date, and the two can only be lined up if someone says where
+ * local is. Read at call time rather than once at module load, so a device that
+ * changes zone or enters daylight saving exports with the zone it is in now.
+ */
+function zoneOffsetMinutes(): number {
+  return -new Date().getTimezoneOffset();
+}
+
 /** Writes the tasks that carry a date to an .ics file on this device. */
 export async function exportCalendar(todos: readonly Todo[]): Promise<CalendarExportOutcome> {
   if (!canExportCalendar()) return { kind: "failed", reason: null };
 
   try {
-    const result = await nativeCommands.exportCalendar([...todos]);
+    const result = await nativeCommands.exportCalendar([...todos], zoneOffsetMinutes());
     if (result.status === "ok") {
       const { path, eventCount, unrepeatableRecurrences } = result.data;
       if (path === null) {

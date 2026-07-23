@@ -113,21 +113,35 @@ pub struct CalendarExport {
 /// `replay_pending_writes`), so reading here would export a list the user is not
 /// looking at. Building the document is a pure rule and lives in `todo-domain`;
 /// this command only supplies the clock and the file system.
+///
+/// `zone_offset_minutes` is where the device sits, in minutes **east** of UTC —
+/// the negation of JavaScript's `getTimezoneOffset()`, which counts west. It
+/// comes from the caller rather than from this process because the view layer is
+/// what turns a wall-clock time the user typed into the stored instant, and a
+/// repeat rule's end date is a local date that has to be read back in the same
+/// zone; a device west of UTC would otherwise export a rule that stops one
+/// repetition early.
 #[tauri::command]
 #[specta::specta]
-fn export_calendar(app: tauri::AppHandle, todos: Vec<Todo>) -> Result<CalendarExport, String> {
-    export_calendar_to_disk(&app, &todos).map_err(|error| error.to_string())
+fn export_calendar(
+    app: tauri::AppHandle,
+    todos: Vec<Todo>,
+    zone_offset_minutes: i32,
+) -> Result<CalendarExport, String> {
+    export_calendar_to_disk(&app, &todos, i64::from(zone_offset_minutes) * 60)
+        .map_err(|error| error.to_string())
 }
 
 fn export_calendar_to_disk(
     app: &tauri::AppHandle,
     todos: &[Todo],
+    zone_offset_seconds: i64,
 ) -> Result<CalendarExport, CalendarExportError> {
     let generated_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)
         .unwrap_or_default();
-    let calendar = ics::build_calendar(todos, generated_at);
+    let calendar = ics::build_calendar(todos, generated_at, zone_offset_seconds);
 
     if calendar.event_count == 0 {
         return Ok(CalendarExport {

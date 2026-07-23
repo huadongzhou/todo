@@ -14,6 +14,10 @@
 
 use todo_contracts::{RecurrenceCalendar, RecurrenceFrequency, RecurrenceRule, Todo, Weekday};
 
+use crate::civil::{
+    add_days, civil_from_days, days_from_civil, parse_date, parse_number, CivilDate,
+};
+
 /// Identifies the product that wrote the file (RFC 5545 3.7.3), in the
 /// `-//owner//product//language` form the specification asks for.
 const PRODUCT_ID: &str = "-//Just Do//Todo//EN";
@@ -44,11 +48,27 @@ pub struct Calendar {
     pub unrepeatable_recurrences: usize,
 }
 
+/// The furthest a real time zone sits from UTC (RFC 5545 has no opinion; the
+/// tz database's extremes are −12:00 and +14:00). A value from outside it is not
+/// a zone, so it is clamped rather than trusted into an `UNTIL` nobody can
+/// explain.
+const MAX_ZONE_OFFSET_SECONDS: i64 = 14 * 3_600;
+
 /// Writes the tasks that carry a date as one `VCALENDAR` document.
 ///
 /// `generated_at_unix` is the export moment in seconds since the Unix epoch; it
 /// becomes the `DTSTAMP` of every event.
-pub fn build_calendar(todos: &[Todo], generated_at_unix: i64) -> Calendar {
+///
+/// `zone_offset_seconds` is where the exporting device sits, in seconds east of
+/// UTC. It is needed for one thing only: a repeat rule ends on a *local* date,
+/// and a stored instant in this application carries no zone of its own — the
+/// view layer writes every instant as UTC — so the device's zone is the only
+/// reading of "local" available. Without it every `UNTIL` on a timed event would
+/// be the end of the UTC day, which is before the last occurrence for anyone
+/// west of UTC (see [`until_value`]).
+pub fn build_calendar(todos: &[Todo], generated_at_unix: i64, zone_offset_seconds: i64) -> Calendar {
+    let zone_offset_seconds =
+        zone_offset_seconds.clamp(-MAX_ZONE_OFFSET_SECONDS, MAX_ZONE_OFFSET_SECONDS);
     let stamp = format_instant(generated_at_unix);
     let mut content = String::new();
 
@@ -60,7 +80,7 @@ pub fn build_calendar(todos: &[Todo], generated_at_unix: i64) -> Calendar {
     let mut event_count = 0;
     let mut unrepeatable_recurrences = 0;
     for todo in todos {
-        let Some(window) = event_window(todo) else {
+        let Some(window) = event_window(todo, zone_offset_seconds) else {
             continue;
         };
         event_count += 1;
@@ -134,12 +154,13 @@ enum EventTime {
 struct EventWindow {
     start: EventTime,
     end: Option<EventTime>,
-    /// The zone the start was written in, in seconds east of UTC. It is kept
-    /// because a repeat rule ends on a *local* date (see the contract) while
-    /// `UNTIL` on a timed event must be a UTC instant, so the two can only be
-    /// lined up if the zone is known. A whole-day event and a value that named
-    /// no zone both leave it at 0 — the first does not need it, and for the
-    /// second UTC is the only reading available.
+    /// The zone the start is read in, in seconds east of UTC. It is kept because
+    /// a repeat rule ends on a *local* date (see the contract) while `UNTIL` on
+    /// a timed event must be a UTC instant, so the two can only be lined up if
+    /// the zone is known. A value that spelled an offset keeps it; one that did
+    /// not takes the exporting device's, which is where "local" is for a user
+    /// exporting from that device. A whole-day event leaves it at 0 — it needs
+    /// no zone at all.
     zone_offset_seconds: i64,
 }
 
@@ -149,7 +170,7 @@ struct EventWindow {
 /// date, and a reminder is used only when the task has no date of its own. A
 /// start date is deliberately not a candidate — it says when a task may begin,
 /// not that anything is happening that day.
-fn event_window(todo: &Todo) -> Option<EventWindow> {
+fn event_window(todo: &Todo, zone_offset_seconds: i64) -> Option<EventWindow> {
     if let Some(start) = todo.starts_at.as_deref().and_then(parse_instant) {
         let end = todo
             .ends_at
@@ -162,7 +183,7 @@ fn event_window(todo: &Todo) -> Option<EventWindow> {
         return Some(EventWindow {
             start: EventTime::Instant(start.unix_seconds),
             end,
-            zone_offset_seconds: start.offset_seconds,
+            zone_offset_seconds: start.offset_seconds.unwrap_or(zone_offset_seconds),
         });
     }
 
@@ -182,7 +203,7 @@ fn event_window(todo: &Todo) -> Option<EventWindow> {
         .map(|instant| EventWindow {
             start: EventTime::Instant(instant.unix_seconds),
             end: None,
-            zone_offset_seconds: instant.offset_seconds,
+            zone_offset_seconds: instant.offset_seconds.unwrap_or(zone_offset_seconds),
         })
 }
 
@@ -268,9 +289,10 @@ fn recurrence_property(rule: &RecurrenceRule, window: &EventWindow) -> Option<St
 /// **in the event's own zone**, carried back to UTC. Taking the last second of
 /// the UTC day instead drops one occurrence for an evening event west of UTC —
 /// a daily 20:00 at UTC−8 happens at 04:00Z the next day, which is already past
-/// `…T235959Z` of the end date. Where the stored value named no zone the offset
-/// is 0 and this is the same value as before; that is not a guess, it is the
-/// only reading such a value has.
+/// `…T235959Z` of the end date. Which zone that is comes from the window: the
+/// offset the stored value spelled, or the exporting device's when it spelled
+/// none — and it spells none for every instant this application writes, because
+/// the view layer normalises to UTC before storing.
 fn until_value(date: CivilDate, window: &EventWindow) -> String {
     match window.start {
         EventTime::AllDay(_) => format_date(date),
@@ -332,43 +354,6 @@ fn write_line(out: &mut String, line: &str) {
     out.push_str(CRLF);
 }
 
-/// A date on the proleptic Gregorian calendar.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CivilDate {
-    year: i64,
-    month: u32,
-    day: u32,
-}
-
-/// Parses `YYYY-MM-DD`, the shape a due date is stored in.
-///
-/// Validity is checked by converting to a day number and back: a date that
-/// survives the round trip is one that exists, which rules out 31 February
-/// without a table of month lengths.
-///
-/// Every slice below goes through [`str::get`], never `&value[a..b]`: these
-/// fields are free-form `String`s in the contract, nothing validates them, and a
-/// value such as `"2026-07-日期"` would otherwise cut a multi-byte character in
-/// half and panic instead of returning `None` the way this function promises.
-fn parse_date(value: &str) -> Option<CivilDate> {
-    let bytes = value.as_bytes();
-    if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
-        return None;
-    }
-
-    let date = CivilDate {
-        year: parse_number(value.get(0..4)?)? as i64,
-        month: parse_number(value.get(5..7)?)?,
-        day: parse_number(value.get(8..10)?)?,
-    };
-
-    if civil_from_days(days_from_civil(date)) == date {
-        Some(date)
-    } else {
-        None
-    }
-}
-
 /// An instant that remembers the zone it was written in.
 ///
 /// The zone is kept, rather than thrown away once the value is in UTC, because a
@@ -378,8 +363,15 @@ fn parse_date(value: &str) -> Option<CivilDate> {
 struct ZonedInstant {
     /// Seconds since the Unix epoch.
     unix_seconds: i64,
-    /// Seconds east of UTC, as the value spelled it.
-    offset_seconds: i64,
+    /// Seconds east of UTC, when the value spelled an offset.
+    ///
+    /// `None` is "this value says nothing about where its day begins and ends" —
+    /// both a value with no designator and one written in UTC. `Z` counts as
+    /// saying nothing on purpose: every instant this application stores went
+    /// through `toISOString()`, so a `Z` is where the value was normalised, not
+    /// where the user is. Reading it as a zone is what used to make `UNTIL` a
+    /// day short west of UTC.
+    offset_seconds: Option<i64>,
 }
 
 /// Parses an ISO 8601 instant into seconds since the Unix epoch and its zone.
@@ -389,7 +381,8 @@ struct ZonedInstant {
 /// offset. A value with no offset at all is read as UTC — every writer in the
 /// repository appends one, so this only decides what to do with a value no
 /// writer here produces, and reading it as UTC keeps the task on the calendar
-/// instead of dropping it.
+/// instead of dropping it. The instant is the same either way; what the two
+/// cases lose, and an explicit offset keeps, is the zone (see [`ZonedInstant`]).
 ///
 /// As in [`parse_date`], every slice goes through [`str::get`] so that an
 /// arbitrary `String` — `"2026-07-23T10:15:00日"` included — returns `None`
@@ -429,15 +422,20 @@ fn parse_instant(value: &str) -> Option<ZonedInstant> {
     let day_seconds =
         i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second.min(59));
     Some(ZonedInstant {
-        unix_seconds: days_from_civil(date) * SECONDS_PER_DAY + day_seconds - offset_seconds,
+        unix_seconds: days_from_civil(date) * SECONDS_PER_DAY + day_seconds
+            - offset_seconds.unwrap_or(0),
         offset_seconds,
     })
 }
 
 /// Reads the zone designator that closes an instant, in seconds east of UTC.
-fn parse_offset(value: &str) -> Option<i64> {
+///
+/// The outer `Option` is "is this a value at all"; the inner one is "did it name
+/// a zone" — `Z` and an absent designator both leave the instant intact and the
+/// zone unknown.
+fn parse_offset(value: &str) -> Option<Option<i64>> {
     if value.is_empty() || value == "Z" || value == "z" {
-        return Some(0);
+        return Some(None);
     }
 
     // `strip_prefix` on a `char`, not `split_at(1)`: the first character of an
@@ -461,16 +459,7 @@ fn parse_offset(value: &str) -> Option<i64> {
     if hours > 23 || minutes > 59 {
         return None;
     }
-    Some(sign * (i64::from(hours) * 3_600 + i64::from(minutes) * 60))
-}
-
-/// Reads a run of ASCII digits. Anything else — a sign, a space, a letter — is
-/// not a number here, so the caller can treat the whole value as unusable.
-fn parse_number(value: &str) -> Option<u32> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    value.parse().ok()
+    Some(Some(sign * (i64::from(hours) * 3_600 + i64::from(minutes) * 60)))
 }
 
 fn format_date(date: CivilDate) -> String {
@@ -492,57 +481,6 @@ fn format_instant(unix_seconds: i64) -> String {
     )
 }
 
-fn add_days(date: CivilDate, days: i64) -> CivilDate {
-    civil_from_days(days_from_civil(date) + days)
-}
-
-/// Days since 1970-01-01, by Howard Hinnant's civil-calendar algorithm. It is
-/// used here rather than a date crate because the domain crate depends on the
-/// contracts alone, and the two conversions below are the whole of what an ICS
-/// file needs.
-fn days_from_civil(date: CivilDate) -> i64 {
-    let year = if date.month <= 2 {
-        date.year - 1
-    } else {
-        date.year
-    };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let month_position = i64::from((date.month + 9) % 12);
-    let day_of_year = (153 * month_position + 2) / 5 + i64::from(date.day) - 1;
-    let day_of_era =
-        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
-/// Inverse of `days_from_civil`.
-fn civil_from_days(days: i64) -> CivilDate {
-    let shifted = days + 719_468;
-    let era = if shifted >= 0 {
-        shifted
-    } else {
-        shifted - 146_096
-    } / 146_097;
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_position = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * month_position + 2) / 5 + 1) as u32;
-    let month = (if month_position < 10 {
-        month_position + 3
-    } else {
-        month_position - 9
-    }) as u32;
-
-    CivilDate {
-        year: if month <= 2 { year + 1 } else { year },
-        month,
-        day,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use todo_contracts::TodoStatus;
@@ -551,6 +489,9 @@ mod tests {
 
     /// 2026-07-23T10:15:00Z, the moment every test exports at.
     const EXPORTED_AT: i64 = 1_784_801_700;
+    /// A device sitting on UTC, which is the only zone that changes nothing.
+    /// The tests that are about the zone name their own.
+    const DEVICE_AT_UTC: i64 = 0;
 
     fn todo(id: &str, title: &str) -> Todo {
         Todo {
@@ -608,7 +549,7 @@ mod tests {
     }
 
     fn rrule_of(todo: Todo) -> Option<String> {
-        let calendar = build_calendar(&[todo], EXPORTED_AT);
+        let calendar = build_calendar(&[todo], EXPORTED_AT, DEVICE_AT_UTC);
         lines(&calendar.content)
             .into_iter()
             .find(|line| line.starts_with("RRULE:"))
@@ -616,7 +557,7 @@ mod tests {
 
     #[test]
     fn the_wrapper_carries_what_rfc_5545_requires() {
-        let calendar = build_calendar(&[], EXPORTED_AT);
+        let calendar = build_calendar(&[], EXPORTED_AT, DEVICE_AT_UTC);
         let lines = lines(&calendar.content);
 
         assert_eq!(lines[0], "BEGIN:VCALENDAR");
@@ -632,7 +573,7 @@ mod tests {
         let mut dated = todo("todo-1", "交周报");
         dated.due_date = Some("2026-07-23".to_owned());
 
-        let calendar = build_calendar(&[dated], EXPORTED_AT);
+        let calendar = build_calendar(&[dated], EXPORTED_AT, DEVICE_AT_UTC);
 
         assert!(calendar.content.ends_with(CRLF));
         // A bare LF anywhere would break the line-break rule of RFC 5545 3.1.
@@ -647,7 +588,7 @@ mod tests {
         let mut dated = todo("todo-1", "交周报");
         dated.due_date = Some("2026-07-23".to_owned());
 
-        let calendar = build_calendar(&[dated], EXPORTED_AT);
+        let calendar = build_calendar(&[dated], EXPORTED_AT, DEVICE_AT_UTC);
         let lines = lines(&calendar.content);
 
         assert_eq!(calendar.event_count, 1);
@@ -666,7 +607,7 @@ mod tests {
         block.starts_at = Some("2026-07-23T09:00:00.000Z".to_owned());
         block.ends_at = Some("2026-07-23T10:30:00Z".to_owned());
 
-        let calendar = build_calendar(&[block], EXPORTED_AT);
+        let calendar = build_calendar(&[block], EXPORTED_AT, DEVICE_AT_UTC);
         let lines = lines(&calendar.content);
 
         // The explicit block wins over the due date.
@@ -679,7 +620,7 @@ mod tests {
         let mut block = todo("todo-3", "站会");
         block.starts_at = Some("2026-07-23T09:00:00+08:00".to_owned());
 
-        let calendar = build_calendar(&[block], EXPORTED_AT);
+        let calendar = build_calendar(&[block], EXPORTED_AT, DEVICE_AT_UTC);
 
         assert!(lines(&calendar.content).contains(&"DTSTART:20260723T010000Z".to_owned()));
     }
@@ -690,7 +631,7 @@ mod tests {
         block.starts_at = Some("2026-07-23T09:00:00Z".to_owned());
         block.ends_at = Some("2026-07-23T09:00:00Z".to_owned());
 
-        let calendar = build_calendar(&[block], EXPORTED_AT);
+        let calendar = build_calendar(&[block], EXPORTED_AT, DEVICE_AT_UTC);
 
         assert!(!calendar.content.contains("DTEND"));
     }
@@ -700,7 +641,7 @@ mod tests {
         let mut reminded = todo("todo-5", "吃药");
         reminded.reminder_at = Some("2026-07-24T12:00:00Z".to_owned());
 
-        let calendar = build_calendar(&[reminded], EXPORTED_AT);
+        let calendar = build_calendar(&[reminded], EXPORTED_AT, DEVICE_AT_UTC);
         let lines = lines(&calendar.content);
 
         assert_eq!(calendar.event_count, 1);
@@ -717,7 +658,7 @@ mod tests {
         let mut dated = todo("todo-8", "有日期");
         dated.due_date = Some("2026-07-23".to_owned());
 
-        let calendar = build_calendar(&[undated, unreadable, dated], EXPORTED_AT);
+        let calendar = build_calendar(&[undated, unreadable, dated], EXPORTED_AT, DEVICE_AT_UTC);
 
         assert_eq!(calendar.event_count, 1);
         assert!(calendar.content.contains("UID:todo-8@just-do.local"));
@@ -731,7 +672,7 @@ mod tests {
         awkward.due_date = Some("2026-07-23".to_owned());
         awkward.notes = Some("第一行\r\n第二行".to_owned());
 
-        let calendar = build_calendar(&[awkward], EXPORTED_AT);
+        let calendar = build_calendar(&[awkward], EXPORTED_AT, DEVICE_AT_UTC);
         let lines = lines(&calendar.content);
 
         assert!(lines.contains(&"SUMMARY:买牛奶\\, 面包\\; 还有\\\\糖".to_owned()));
@@ -743,7 +684,7 @@ mod tests {
         let mut long = todo("todo-10", &"日程".repeat(60));
         long.due_date = Some("2026-07-23".to_owned());
 
-        let calendar = build_calendar(&[long], EXPORTED_AT);
+        let calendar = build_calendar(&[long], EXPORTED_AT, DEVICE_AT_UTC);
 
         for line in calendar.content.split(CRLF) {
             assert!(line.len() <= MAX_LINE_OCTETS, "{} octets: {line}", line.len());
@@ -898,7 +839,7 @@ mod tests {
         assert_eq!(rrule_of(lunar.clone()), None);
         assert_eq!(rrule_of(every_other_workday.clone()), None);
         // The events themselves still export.
-        let calendar = build_calendar(&[lunar, every_other_workday], EXPORTED_AT);
+        let calendar = build_calendar(&[lunar, every_other_workday], EXPORTED_AT, DEVICE_AT_UTC);
         assert_eq!(calendar.event_count, 2);
     }
 
@@ -925,32 +866,6 @@ mod tests {
     }
 
     #[test]
-    fn civil_dates_round_trip_across_the_awkward_boundaries() {
-        for (year, month, day) in [
-            (1970, 1, 1),
-            (2000, 2, 29),
-            (2026, 12, 31),
-            (2100, 3, 1),
-            (1969, 12, 31),
-        ] {
-            let date = CivilDate { year, month, day };
-            assert_eq!(civil_from_days(days_from_civil(date)), date);
-        }
-
-        assert_eq!(days_from_civil(CivilDate { year: 1970, month: 1, day: 1 }), 0);
-        assert_eq!(
-            add_days(CivilDate { year: 2026, month: 12, day: 31 }, 1),
-            CivilDate { year: 2027, month: 1, day: 1 }
-        );
-        // A day that does not exist must not round trip, or the parser would
-        // accept 31 February.
-        assert_ne!(
-            civil_from_days(days_from_civil(CivilDate { year: 2026, month: 2, day: 31 })),
-            CivilDate { year: 2026, month: 2, day: 31 }
-        );
-    }
-
-    #[test]
     fn instants_are_read_in_every_shape_this_repository_writes() {
         let at = |value: &str| parse_instant(value).map(|instant| instant.unix_seconds);
 
@@ -967,15 +882,21 @@ mod tests {
         // The zone travels with the instant, because UNTIL needs it.
         assert_eq!(
             parse_instant("1970-01-01T08:00:00+08:00"),
-            Some(ZonedInstant { unix_seconds: 0, offset_seconds: 8 * 3_600 })
+            Some(ZonedInstant { unix_seconds: 0, offset_seconds: Some(8 * 3_600) })
         );
         assert_eq!(
             parse_instant("1969-12-31T16:00:00-08:00"),
-            Some(ZonedInstant { unix_seconds: 0, offset_seconds: -8 * 3_600 })
+            Some(ZonedInstant { unix_seconds: 0, offset_seconds: Some(-8 * 3_600) })
         );
+        // A value normalised to UTC, and one with no designator at all: the same
+        // instant, and neither of them says where its local day ends.
         assert_eq!(
             parse_instant("1970-01-01T00:00:00Z"),
-            Some(ZonedInstant { unix_seconds: 0, offset_seconds: 0 })
+            Some(ZonedInstant { unix_seconds: 0, offset_seconds: None })
+        );
+        assert_eq!(
+            parse_instant("1970-01-01T00:00:00"),
+            Some(ZonedInstant { unix_seconds: 0, offset_seconds: None })
         );
     }
 
@@ -1061,7 +982,7 @@ mod tests {
             dated_rule.until = Some(value.clone());
             dated.recurrence = Some(dated_rule);
 
-            let calendar = build_calendar(&[probe, dated], EXPORTED_AT);
+            let calendar = build_calendar(&[probe, dated], EXPORTED_AT, DEVICE_AT_UTC);
             assert!(calendar.content.ends_with(CRLF), "{value:?}");
         }
     }
@@ -1096,6 +1017,66 @@ mod tests {
     }
 
     #[test]
+    fn an_end_date_takes_the_exporting_devices_zone_when_the_value_names_none() {
+        // What this application actually stores: `toISOString()`, so every
+        // instant arrives as UTC and says nothing about where the user is. The
+        // device does, and without it a 20:00 task at UTC−8 would end at
+        // 20261231T235959Z — before its own last occurrence at 20270101T040000Z,
+        // one repetition short.
+        let mut evening = todo("todo-29", "夜跑");
+        evening.starts_at = Some("2026-07-24T04:00:00Z".to_owned());
+        let mut rule = weekly(Vec::new());
+        rule.frequency = RecurrenceFrequency::Daily;
+        rule.until = Some("2026-12-31".to_owned());
+        evening.recurrence = Some(rule);
+
+        let west = build_calendar(&[evening.clone()], EXPORTED_AT, -8 * 3_600);
+        assert!(lines(&west.content).contains(&"RRULE:FREQ=DAILY;UNTIL=20270101T075959Z".to_owned()));
+
+        // The same task exported from a device east of UTC: the local day ends
+        // earlier, and so does the rule.
+        let east = build_calendar(&[evening], EXPORTED_AT, 8 * 3_600);
+        assert!(lines(&east.content).contains(&"RRULE:FREQ=DAILY;UNTIL=20261231T155959Z".to_owned()));
+    }
+
+    #[test]
+    fn a_value_that_names_its_own_zone_keeps_it_whatever_device_exports() {
+        // A value that came down from another device carries its zone, and that
+        // zone is the one its local day belongs to — the exporting device's is
+        // only the fallback.
+        let mut evening = todo("todo-30", "夜跑");
+        evening.starts_at = Some("2026-07-23T20:00:00-08:00".to_owned());
+        let mut rule = weekly(Vec::new());
+        rule.frequency = RecurrenceFrequency::Daily;
+        rule.until = Some("2026-12-31".to_owned());
+        evening.recurrence = Some(rule);
+
+        let calendar = build_calendar(&[evening], EXPORTED_AT, 8 * 3_600);
+
+        assert!(lines(&calendar.content)
+            .contains(&"RRULE:FREQ=DAILY;UNTIL=20270101T075959Z".to_owned()));
+    }
+
+    #[test]
+    fn an_offset_no_zone_has_cannot_reach_the_file() {
+        // The offset crosses the IPC boundary as a number; one that is not a
+        // zone is clamped to the furthest one that is, rather than producing an
+        // UNTIL days away from the end date the user set.
+        let mut evening = todo("todo-31", "夜跑");
+        evening.starts_at = Some("2026-07-24T04:00:00Z".to_owned());
+        let mut rule = weekly(Vec::new());
+        rule.frequency = RecurrenceFrequency::Daily;
+        rule.until = Some("2026-12-31".to_owned());
+        evening.recurrence = Some(rule);
+
+        let calendar = build_calendar(&[evening], EXPORTED_AT, 99 * 3_600);
+
+        // Clamped to +14:00: the last second of 2026-12-31 there.
+        assert!(lines(&calendar.content)
+            .contains(&"RRULE:FREQ=DAILY;UNTIL=20261231T095959Z".to_owned()));
+    }
+
+    #[test]
     fn rules_rfc_5545_cannot_say_are_counted_for_the_caller_to_report() {
         let mut lunar = todo("todo-24", "农历生日");
         lunar.due_date = Some("2026-09-01".to_owned());
@@ -1121,6 +1102,7 @@ mod tests {
         let calendar = build_calendar(
             &[lunar, every_other_workday, weekly_task, plain],
             EXPORTED_AT,
+            DEVICE_AT_UTC,
         );
 
         assert_eq!(calendar.event_count, 4);
@@ -1138,7 +1120,7 @@ mod tests {
         lunar_rule.calendar = RecurrenceCalendar::Lunar;
         undated_lunar.recurrence = Some(lunar_rule);
 
-        let calendar = build_calendar(&[undated_lunar], EXPORTED_AT);
+        let calendar = build_calendar(&[undated_lunar], EXPORTED_AT, DEVICE_AT_UTC);
 
         assert_eq!(calendar.event_count, 0);
         assert_eq!(calendar.unrepeatable_recurrences, 0);

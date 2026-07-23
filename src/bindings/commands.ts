@@ -37,8 +37,16 @@ export const commands = {
 	 *  `replay_pending_writes`), so reading here would export a list the user is not
 	 *  looking at. Building the document is a pure rule and lives in `todo-domain`;
 	 *  this command only supplies the clock and the file system.
+	 * 
+	 *  `zone_offset_minutes` is where the device sits, in minutes **east** of UTC —
+	 *  the negation of JavaScript's `getTimezoneOffset()`, which counts west. It
+	 *  comes from the caller rather than from this process because the view layer is
+	 *  what turns a wall-clock time the user typed into the stored instant, and a
+	 *  repeat rule's end date is a local date that has to be read back in the same
+	 *  zone; a device west of UTC would otherwise export a rule that stops one
+	 *  repetition early.
 	 */
-	exportCalendar: (todos: Todo_Deserialize[]) => typedError<CalendarExport, string>(__TAURI_INVOKE("export_calendar", { todos })),
+	exportCalendar: (todos: Todo_Deserialize[], zoneOffsetMinutes: number) => typedError<CalendarExport, string>(__TAURI_INVOKE("export_calendar", { todos, zoneOffsetMinutes })),
 };
 
 /* Constants */
