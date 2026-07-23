@@ -2,9 +2,14 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { Check, Trash2 } from "lucide-vue-next";
 import Button from "@/components/ui/button/Button.vue";
-import { toInstant, toLocalDateTimeInput } from "@/lib/datetime";
+import TodoFields, {
+  createEmptyDraft,
+  draftFromTodo,
+  isSameDraft,
+  type TodoDraft,
+} from "@/components/TodoFields.vue";
+import { clearFormAlert } from "@/lib/form-alert";
 import { dueDateTone, formatDueDate, TONE_LABEL_CLASS } from "@/lib/dueDate";
-import { MAX_TITLE_CHARS } from "@/lib/native";
 import { useTodoStore } from "@/stores/todos";
 import type { Todo } from "@/types/todo";
 
@@ -22,12 +27,15 @@ const emit = defineEmits<{ edit: []; close: [] }>();
 const todoStore = useTodoStore();
 
 const titleButtonRef = ref<HTMLButtonElement | null>(null);
-const titleInputRef = ref<HTMLInputElement | null>(null);
+const fieldsRef = ref<InstanceType<typeof TodoFields> | null>(null);
 
-const draftTitle = ref("");
-const draftDueDate = ref("");
-const draftReminderAt = ref("");
-const titleError = ref(false);
+const draft = ref<TodoDraft>(createEmptyDraft());
+/**
+ * The draft as it was when the form opened. Comparing against it — rather than
+ * against a list of fields — is what keeps "changed nothing, wrote nothing"
+ * true when a field is added.
+ */
+const openedDraft = ref<TodoDraft>(createEmptyDraft());
 /**
  * The title the form was opened on. The form keeps it as its accessible name
  * after a save, so the name does not change under a screen reader whose focus
@@ -37,44 +45,27 @@ const openedTitle = ref("");
 
 const completed = computed(() => props.todo.status === "completed");
 
-/**
- * A reminder in the past is a legitimate intent — it fires once, immediately —
- * so this only warns; it never blocks the save.
- */
-const reminderInPast = computed(() => {
-  const instant = toInstant(draftReminderAt.value);
-  return instant !== null && new Date(instant).getTime() < Date.now();
-});
-
 /** Fills the draft from the stored todo whenever this row opens for editing. */
 watch(
   () => props.editing,
   (editing) => {
-    if (!editing) return;
-    draftTitle.value = props.todo.title;
-    draftDueDate.value = props.todo.dueDate ?? "";
-    draftReminderAt.value = toLocalDateTimeInput(props.todo.reminderAt);
-    titleError.value = false;
+    if (!editing) {
+      // Closing by any route — save, cancel, Esc, or another row taking over —
+      // ends whatever the form had to say.
+      clearFormAlert();
+      return;
+    }
+    openedDraft.value = draftFromTodo(props.todo);
+    draft.value = { ...openedDraft.value };
     openedTitle.value = props.todo.title;
-    void focusTitleInput();
+    void focusTitle();
   },
 );
 
-// The error is raised on blur and on submit, never per keystroke; but once the
-// user has typed something it has nothing left to report, so it goes at once.
-watch(draftTitle, (value) => {
-  if (titleError.value && value.trim()) titleError.value = false;
-});
-
-async function focusTitleInput(): Promise<void> {
+/** Focuses the title field, once the form has actually been rendered. */
+async function focusTitle(): Promise<void> {
   await nextTick();
-  const input = titleInputRef.value;
-  if (!input) return;
-  input.focus();
-  // Caret at the end rather than a full selection: a selected title would be
-  // wiped by the first keystroke of someone who only meant to append.
-  const end = input.value.length;
-  input.setSelectionRange(end, end);
+  await fieldsRef.value?.focusTitle();
 }
 
 /**
@@ -87,12 +78,6 @@ async function returnFocus(): Promise<void> {
   titleButtonRef.value?.focus();
 }
 
-function validateTitle(): boolean {
-  const valid = draftTitle.value.trim().length > 0;
-  titleError.value = !valid;
-  return valid;
-}
-
 function finishEditing(): void {
   emit("close");
   void returnFocus();
@@ -100,23 +85,19 @@ function finishEditing(): void {
 
 function save(): void {
   // The store silently ignores an empty title, so a UI that let one through
-  // would leave the user with a save that did nothing and said nothing.
-  if (!validateTitle()) {
-    void focusTitleInput();
+  // would leave the user with a save that did nothing and said nothing. What
+  // counts as valid is the field block's business; this only reads the verdict.
+  if (!fieldsRef.value?.validate()) {
+    void focusTitle();
     return;
   }
 
-  const title = draftTitle.value.trim();
-  const dueDate = draftDueDate.value || null;
-  const reminderAt = toInstant(draftReminderAt.value);
   // A save that changes nothing writes nothing: an empty change would still
   // queue an outbound sync operation, and later an undo-stack entry that undoes
   // nothing visible.
-  const unchanged =
-    title === props.todo.title &&
-    dueDate === (props.todo.dueDate ?? null) &&
-    reminderAt === (props.todo.reminderAt ?? null);
-  if (!unchanged) todoStore.update(props.todo.id, { title, dueDate, reminderAt });
+  if (!isSameDraft(draft.value, openedDraft.value)) {
+    todoStore.update(props.todo.id, draft.value);
+  }
 
   finishEditing();
 }
@@ -144,51 +125,18 @@ function cancel(): void {
       @submit.prevent="save"
       @keydown.esc="cancel"
     >
-      <label class="block">
-        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">标题</span>
-        <input
-          ref="titleInputRef"
-          v-model="draftTitle"
-          :maxlength="MAX_TITLE_CHARS"
-          class="min-h-11 w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-base focus:ring-2 focus:ring-sky-500 sm:text-sm dark:bg-slate-900"
-          :aria-invalid="titleError ? 'true' : undefined"
-          :aria-describedby="titleError ? `todo-title-error-${todo.id}` : undefined"
-          @blur="validateTitle()"
-        />
-      </label>
-      <p
-        v-if="titleError"
-        :id="`todo-title-error-${todo.id}`"
-        class="m-0 text-xs text-red-600 dark:text-red-400"
-      >
-        标题不能为空，请输入内容，或按 Esc 取消编辑。
-      </p>
-
-      <div class="grid gap-3 sm:grid-cols-2">
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400"
-            >截止日</span
-          >
-          <input
-            v-model="draftDueDate"
-            type="date"
-            class="min-h-11 w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-base focus:ring-2 focus:ring-sky-500 sm:text-sm dark:bg-slate-900"
-          />
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400"
-            >提醒时间</span
-          >
-          <input
-            v-model="draftReminderAt"
-            type="datetime-local"
-            class="min-h-11 w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-base focus:ring-2 focus:ring-sky-500 sm:text-sm dark:bg-slate-900"
-          />
-        </label>
-      </div>
-      <p v-if="reminderInPast" class="m-0 text-xs text-amber-700 dark:text-amber-300">
-        提醒时间已过，保存后会立即提醒一次。
-      </p>
+      <!--
+        The same field block the create form renders. Editing is "see all of it,
+        change one of them", so its details region is always open and it has no
+        expander to put in the `actions` slot.
+      -->
+      <TodoFields
+        ref="fieldsRef"
+        v-model="draft"
+        :id-prefix="`todo-${todo.id}`"
+        :details-open="true"
+        :details-id="`todo-${todo.id}-details`"
+      />
 
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="m-0 text-xs text-slate-500 dark:text-slate-400">Enter 保存 · Esc 取消</p>

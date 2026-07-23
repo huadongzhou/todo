@@ -11,17 +11,17 @@ import {
 import { Check, ClipboardList, Plus, Settings2, SlidersHorizontal, X } from "lucide-vue-next";
 import Button from "@/components/ui/button/Button.vue";
 import TodayCard from "@/components/TodayCard.vue";
+import TodoFields, { createEmptyDraft, type TodoDraft } from "@/components/TodoFields.vue";
 import TodoItem from "@/components/TodoItem.vue";
 import type { ThemePreference } from "@/lib/appearance";
 import { canExportCalendar, exportCalendar } from "@/lib/calendar-export";
-import { toInstant } from "@/lib/datetime";
+import { formAlert } from "@/lib/form-alert";
 import {
   closeTodayCard,
   openTodayCard,
   isTodayCardOpen,
   isTodayCardWindow,
 } from "@/lib/today-card";
-import { MAX_TITLE_CHARS } from "@/lib/native";
 import { setupTodayCardSync } from "@/lib/today-card-sync";
 import {
   deviceId,
@@ -50,12 +50,16 @@ const isCard = isTodayCardWindow();
 const todoStore = useTodoStore();
 const settingsStore = useSettingsStore();
 let stopTodayCardSync: (() => void) | undefined;
-const draft = ref("");
-const draftDueDate = ref("");
-const draftReminderAt = ref("");
+/**
+ * The whole draft, as one object. The page never touches a field inside it: it
+ * hands it to <TodoFields> to be filled in, hands it to the store to be saved,
+ * and replaces it wholesale to reset — which is what lets a field be added
+ * without this file changing at all.
+ */
+const draft = ref<TodoDraft>(createEmptyDraft());
 const settingsOpen = ref(false);
 const showDetails = ref(false);
-const draftInputRef = ref<HTMLInputElement | null>(null);
+const fieldsRef = ref<InstanceType<typeof TodoFields> | null>(null);
 const activeShortcut = ref<string>(DEFAULT_QUICK_ADD_SHORTCUT);
 /**
  * The row currently open for editing, or `null`. Mutual exclusion lives here
@@ -64,12 +68,15 @@ const activeShortcut = ref<string>(DEFAULT_QUICK_ADD_SHORTCUT);
  */
 const editingId = ref<string | null>(null);
 
-/** Brings the main window to the user's attention and focuses the draft box. */
+/**
+ * Brings the main window to the user's attention and focuses the draft box. The
+ * details region is left exactly as the user left it: the shortcut means "put
+ * the window in front of me", not "put the interface back the way it shipped".
+ */
 async function toggleQuickAdd(): Promise<void> {
-  showDetails.value = false;
   settingsOpen.value = false;
   await new Promise((resolve) => requestAnimationFrame(resolve));
-  draftInputRef.value?.focus();
+  void fieldsRef.value?.focusTitle();
 }
 
 onMounted(async () => {
@@ -144,11 +151,15 @@ const exportButtonRef = ref<ComponentPublicInstance | null>(null);
 const exportAlert = ref<{ tone: "success" | "warn" | "error"; message: string } | null>(null);
 
 /**
- * What the single page-level alert says. A storage alert always wins: it is
- * about data the user may be losing, and a cheerful "exported" line must not
- * push it off the screen.
+ * What the single page-level alert says.
+ *
+ * The form's line comes first, ahead of the storage alert it used to sit behind.
+ * It is the direct answer to something the user just did and it lasts one
+ * keystroke, whereas a storage alert is a standing condition that comes back by
+ * itself; letting the standing one win would mean a device that once failed to
+ * write could never again tell anyone why a submit was refused.
  */
-const pageAlert = computed(() => todoStore.storageAlert ?? exportAlert.value);
+const pageAlert = computed(() => formAlert.value ?? todoStore.storageAlert ?? exportAlert.value);
 
 // A result the user cannot see any more has nothing left to report, and leaving
 // it behind would show a stale line the next time the panel is opened.
@@ -224,14 +235,22 @@ function formatSyncTime(iso: string): string {
   return parsed.toLocaleString();
 }
 
+/**
+ * Hands the draft to the store, whatever it happens to contain. Validation is
+ * the field block's business — this only reads the verdict — and the reset is a
+ * fresh draft object rather than a list of fields to blank out.
+ */
 function submit(): void {
-  const dueDate = draftDueDate.value || null;
-  const reminderAt = toInstant(draftReminderAt.value);
-  if (todoStore.add({ title: draft.value, dueDate, reminderAt })) {
-    draft.value = "";
-    draftDueDate.value = "";
-    draftReminderAt.value = "";
-    showDetails.value = false;
+  const fields = fieldsRef.value;
+  if (!fields?.validate()) {
+    void fields?.focusTitle();
+    return;
+  }
+  if (todoStore.add(draft.value)) {
+    draft.value = createEmptyDraft();
+    // The details region stays as it is: opening it was a deliberate statement
+    // of intent, and reopening it for every task in a batch is pure friction.
+    void fields.focusTitle();
   }
 }
 
@@ -272,14 +291,23 @@ function updateTheme(preference: ThemePreference): void {
       </div>
     </header>
 
+    <!--
+      The one live region on the page, and the only one there may be. It stays
+      mounted with no text rather than being created along with its first
+      message: a status region that appears at the same moment as its content is
+      a well-known way to have nothing announced at all. With nothing to say it
+      is `sr-only`, so the page looks exactly as it did.
+    -->
     <p
-      v-if="pageAlert"
-      class="mb-6 rounded-lg px-3 py-2 text-sm"
-      :class="ALERT_TONE_CLASS[pageAlert.tone]"
+      class="text-sm"
+      :class="
+        pageAlert ? `mb-6 rounded-lg px-3 py-2 ${ALERT_TONE_CLASS[pageAlert.tone]}` : 'sr-only'
+      "
       role="status"
       aria-live="polite"
+      aria-atomic="true"
     >
-      {{ pageAlert.message }}
+      {{ pageAlert?.message ?? "" }}
     </p>
 
     <section v-if="settingsOpen" class="surface-card mb-6 p-5" aria-labelledby="settings-heading">
@@ -450,62 +478,44 @@ function updateTheme(preference: ThemePreference): void {
       </fieldset>
     </section>
 
-    <form class="surface-card mb-6 p-2" @submit.prevent="submit">
-      <div class="flex gap-2">
-        <!--
-          The title stops where the contract stops (`MAX_TITLE_CHARS`, generated
-          from Rust). Without the cap a longer paste is accepted here, refused by
-          the database, and lost on the next restart — the user would never see
-          again what they had just typed.
-        -->
-        <input
-          ref="draftInputRef"
-          v-model="draft"
-          :maxlength="MAX_TITLE_CHARS"
-          class="min-w-0 flex-1 rounded-lg border-0 bg-transparent px-3 py-2 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-sky-500"
-          placeholder="添加一项待办…"
-          aria-label="待办标题"
-        />
-        <Button
-          type="button"
-          variant="ghost"
-          class="!p-2"
-          aria-label="展开更多选项"
-          :aria-expanded="showDetails"
-          @click="showDetails = !showDetails"
-        >
-          <SlidersHorizontal :size="18" />
-        </Button>
-        <Button type="submit" :disabled="!draft.trim()">
-          <Plus :size="18" /><span class="ml-1">添加</span>
-        </Button>
-      </div>
-
-      <div
-        v-if="showDetails"
-        class="mt-2 grid gap-2 border-t border-slate-100 pt-3 sm:grid-cols-2 dark:border-slate-800"
+    <!--
+      The create shell knows two things about the form it holds: that there is a
+      field block, and whether the details region is open. It never names a
+      field, never lays one out, and never resets one — which is what makes
+      adding a field a change to <TodoFields> and nothing else.
+    -->
+    <form class="surface-card mb-6 p-4" @submit.prevent="submit">
+      <TodoFields
+        ref="fieldsRef"
+        v-model="draft"
+        id-prefix="create"
+        :details-open="showDetails"
+        details-id="create-details"
       >
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400"
-            >截止日</span
-          >
-          <input
-            v-model="draftDueDate"
-            type="date"
-            class="w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 dark:bg-slate-900"
-          />
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400"
-            >提醒时间</span
-          >
-          <input
-            v-model="draftReminderAt"
-            type="datetime-local"
-            class="w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 dark:bg-slate-900"
-          />
-        </label>
-      </div>
+        <template #actions>
+          <div class="ml-auto flex gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              class="min-h-11 min-w-11 !p-2"
+              :aria-label="showDetails ? '收起更多选项' : '展开更多选项'"
+              :aria-expanded="showDetails"
+              aria-controls="create-details"
+              @click="showDetails = !showDetails"
+            >
+              <SlidersHorizontal :size="20" />
+            </Button>
+            <!--
+              Never disabled. A greyed-out button cannot say why a submit was
+              refused, and disabling a submit also kills the implicit Enter that
+              the quick-add shortcut promises.
+            -->
+            <Button type="submit" class="min-h-11">
+              <Plus :size="16" /><span class="ml-1">添加</span>
+            </Button>
+          </div>
+        </template>
+      </TodoFields>
     </form>
 
     <p

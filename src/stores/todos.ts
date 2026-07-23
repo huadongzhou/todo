@@ -154,6 +154,10 @@ export const useTodoStore = defineStore("todos", () => {
           title: todo.title,
           status: todo.status,
           dueDate: todo.dueDate,
+          // The reminder travels with the creation too. Leaving it out meant a
+          // reminder set while adding the task never reached another device —
+          // the same gap `update` already had, on the sibling path.
+          reminderAt: todo.reminderAt,
           completedAt: todo.completedAt,
         },
         todo.createdAt,
