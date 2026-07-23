@@ -166,25 +166,38 @@ export const useTodoStore = defineStore("todos", () => {
     const todo = items.value.find((item) => item.id === id);
     if (!todo) return;
 
+    // The outbound operation is built from what was actually written locally,
+    // never from the raw patch. Two reasons, both fatal:
+    //   - the server validates a sync request as one batch, so a single raw
+    //     title it refuses (blank, or longer than the contract allows) rejects
+    //     every operation in the request, and a rejected operation is never
+    //     acknowledged — it stays in the queue and re-poisons every later
+    //     request, which stops this device syncing for good;
+    //   - a title accepted in its raw form would still leave the other devices
+    //     showing a different string than this one does.
+    const outbound: TodoPatch = {};
+
     if (patch.title !== undefined) {
       const normalized = normalizeTitle(patch.title);
-      if (normalized) todo.title = normalized;
+      if (normalized) {
+        todo.title = normalized;
+        outbound.title = normalized;
+      }
     }
-    if (patch.dueDate !== undefined) todo.dueDate = patch.dueDate;
-    if (patch.reminderAt !== undefined) todo.reminderAt = patch.reminderAt;
+    if (patch.dueDate !== undefined) {
+      todo.dueDate = patch.dueDate;
+      outbound.dueDate = patch.dueDate;
+    }
+    // The reminder travels too: it is an editable field, so leaving it out of
+    // the operation means a reminder changed here never reaches another device.
+    if (patch.reminderAt !== undefined) {
+      todo.reminderAt = patch.reminderAt;
+      outbound.reminderAt = patch.reminderAt;
+    }
 
     persist(todo);
     void scheduleReminder(todo);
-    void recordOperation(
-      buildUpsertOperation(
-        todo.id,
-        {
-          title: patch.title,
-          dueDate: patch.dueDate,
-        },
-        new Date().toISOString(),
-      ),
-    );
+    void recordOperation(buildUpsertOperation(todo.id, outbound, new Date().toISOString()));
   }
 
   function toggle(id: string) {

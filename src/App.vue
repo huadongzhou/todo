@@ -8,20 +8,13 @@ import {
   watch,
   type ComponentPublicInstance,
 } from "vue";
-import {
-  Check,
-  ClipboardList,
-  Plus,
-  Settings2,
-  SlidersHorizontal,
-  Trash2,
-  X,
-} from "lucide-vue-next";
+import { Check, ClipboardList, Plus, Settings2, SlidersHorizontal, X } from "lucide-vue-next";
 import Button from "@/components/ui/button/Button.vue";
 import TodayCard from "@/components/TodayCard.vue";
+import TodoItem from "@/components/TodoItem.vue";
 import type { ThemePreference } from "@/lib/appearance";
 import { canExportCalendar, exportCalendar } from "@/lib/calendar-export";
-import { dueDateTone, formatDueDate, TONE_LABEL_CLASS } from "@/lib/dueDate";
+import { toInstant } from "@/lib/datetime";
 import {
   closeTodayCard,
   openTodayCard,
@@ -64,6 +57,12 @@ const settingsOpen = ref(false);
 const showDetails = ref(false);
 const draftInputRef = ref<HTMLInputElement | null>(null);
 const activeShortcut = ref<string>(DEFAULT_QUICK_ADD_SHORTCUT);
+/**
+ * The row currently open for editing, or `null`. Mutual exclusion lives here
+ * rather than in the rows because it is a property of the list: opening one row
+ * is what closes another, and a row cannot know about its siblings.
+ */
+const editingId = ref<string | null>(null);
 
 /** Brings the main window to the user's attention and focuses the draft box. */
 async function toggleQuickAdd(): Promise<void> {
@@ -216,13 +215,6 @@ async function runExport(): Promise<void> {
     await nextTick();
     restoreExportFocus();
   }
-}
-
-/** Converts a `datetime-local` input value to an ISO8601 instant (local tz). */
-function toInstant(value: string): string | null {
-  if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
 /** Formats an ISO timestamp into a short local time label for the UI. */
@@ -531,50 +523,14 @@ function updateTheme(preference: ThemePreference): void {
     <section aria-labelledby="todo-list-heading">
       <h2 id="todo-list-heading" class="sr-only">待办列表</h2>
       <div v-if="todoStore.items.length" class="surface-card overflow-hidden">
-        <article
+        <TodoItem
           v-for="todo in todoStore.items"
           :key="todo.id"
-          class="flex items-center gap-3 border-b border-slate-100 px-4 py-3 last:border-0 dark:border-slate-800"
-        >
-          <button
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-300 text-white focus-ring dark:border-slate-600"
-            :class="
-              todo.status === 'completed'
-                ? 'border-sky-500 bg-sky-500'
-                : 'bg-white dark:bg-slate-950'
-            "
-            :aria-label="todo.status === 'completed' ? '标记为未完成' : '标记为完成'"
-            @click="todoStore.toggle(todo.id)"
-          >
-            <Check v-if="todo.status === 'completed'" :size="15" />
-          </button>
-          <div class="min-w-0 flex-1">
-            <p
-              class="m-0 text-slate-700 dark:text-slate-200"
-              :class="{
-                'text-slate-400 line-through dark:text-slate-500': todo.status === 'completed',
-              }"
-            >
-              {{ todo.title }}
-            </p>
-            <p
-              v-if="todo.dueDate"
-              class="mb-0 mt-1 inline-block rounded-md px-1.5 py-0.5 text-xs font-medium"
-              :class="TONE_LABEL_CLASS[dueDateTone(todo.dueDate, todo.status === 'completed')]"
-            >
-              {{ formatDueDate(todo.dueDate) }}
-              <span v-if="todo.reminderAt"> · 已设提醒</span>
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            class="!p-2 text-slate-400 hover:text-red-600"
-            :aria-label="`删除 ${todo.title}`"
-            @click="todoStore.remove(todo.id)"
-          >
-            <Trash2 :size="17" />
-          </Button>
-        </article>
+          :todo="todo"
+          :editing="editingId === todo.id"
+          @edit="editingId = todo.id"
+          @close="editingId = null"
+        />
       </div>
       <div v-else class="surface-card grid place-items-center px-6 py-16 text-center">
         <div
