@@ -29,6 +29,16 @@ export const commands = {
 	 *  unusable and nothing at all was applied.
 	 */
 	replayPendingWrites: (upserts: Todo_Deserialize[], deletions: string[]) => typedError<PendingWriteReport, string>(__TAURI_INVOKE("replay_pending_writes", { upserts, deletions })),
+	/**
+	 *  Writes the tasks that carry a date to an .ics file and says where it went.
+	 * 
+	 *  The tasks come from the caller rather than from the database on purpose: the
+	 *  view layer holds writes the database has not taken yet (see
+	 *  `replay_pending_writes`), so reading here would export a list the user is not
+	 *  looking at. Building the document is a pure rule and lives in `todo-domain`;
+	 *  this command only supplies the clock and the file system.
+	 */
+	exportCalendar: (todos: Todo_Deserialize[]) => typedError<CalendarExport, string>(__TAURI_INVOKE("export_calendar", { todos })),
 };
 
 /* Constants */
@@ -64,6 +74,26 @@ export type Attachment_Serialize = {
 	url: string,
 	/**  Label shown instead of the raw location. */
 	name?: string | null,
+};
+
+/**
+ *  Where an export landed, and how much of it there was.
+ * 
+ *  `path` is absent for the one outcome that is neither success nor failure: no
+ *  task carried a date, so there was nothing to put in a file and no file was
+ *  written. Saying that with an absent path rather than an error keeps "nothing
+ *  to export" out of the error channel, where the view layer would have to tell
+ *  it apart from a disk that refused the write.
+ * 
+ *  `unrepeatable_recurrences` is how many of those events carry a repeat rule
+ *  RFC 5545 cannot express and therefore appear once instead of repeating. It
+ *  travels with the result so the view layer can say so: a repeat the file drops
+ *  without a word is a repeat the user believes they exported.
+ */
+export type CalendarExport = {
+	path: string | null,
+	eventCount: number,
+	unrepeatableRecurrences: number,
 };
 
 /**

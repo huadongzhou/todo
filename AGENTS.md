@@ -39,7 +39,7 @@
 
 ### 客户端
 
-客户端是基于 Tauri 2 的跨平台原生应用，负责应用生命周期、窗口与系统能力，并承载视图端。Rust command 与 capability 以最小权限方式向视图端暴露原生能力；目标平台包括 Windows、macOS、Linux、iOS 和 Android。本地任务数据当前以官方 Store 插件持久化，目标迁移为 SQLite（桌面与移动统一），并作为同步与周期任务的本地数据底座，经 repository 接口接入视图端。
+客户端是基于 Tauri 2 的跨平台原生应用，负责应用生命周期、窗口与系统能力，并承载视图端。客户端可直接依赖 `crates/contracts/` 与 `crates/domain/`（纯规则在两端复用，如 ICS 生成）。Rust command 与 capability 以最小权限方式向视图端暴露原生能力；目标平台包括 Windows、macOS、Linux、iOS 和 Android。本地任务数据当前以官方 Store 插件持久化，目标迁移为 SQLite（桌面与移动统一），并作为同步与周期任务的本地数据底座，经 repository 接口接入视图端。
 
 ### 服务端
 
@@ -80,6 +80,8 @@ flowchart LR
   UI --> TauriAPI
   ViewDomain -. HTTP DTO .-> Contracts
   Client -. HTTP 请求 .-> Routes
+  Core --> Domain
+  Core --> Contracts
 ```
 
 ## 开发规范
@@ -123,7 +125,7 @@ flowchart LR
 - contracts DTO 统一派生 `Clone, Debug, Deserialize, Serialize, TS, Type`，标注 `#[serde(rename_all = "camelCase", deny_unknown_fields)]` 与 `#[ts(rename_all = "camelCase")]`；可选字段加 `#[serde(default, skip_serializing_if = "Option::is_none")]` 与 `#[ts(optional)]`（允许写入 null 的用 `#[ts(optional = nullable)]`）；校验作为契约方法就近实现（如 `validate() -> Result<(), ContractValidationError>`）。
 - contracts 不得使用 `#[serde(flatten)]`，枚举优先保持无载荷变体；确需带载荷时必须同步复核 `crates/server/` 的 `patch_from_json` 未知字段放宽路径——该路径靠 serde 派生代码在 `deserialize_struct` 交出的 `FIELDS` 表筛掉本 build 叫不出名字的键，flatten 的类型不交出该表、带载荷变体内部也够不着，两者都会让未知字段退回「整行静默跳过」或被 serde 静默忽略，服务端二进制回滚时即表现为整行数据读不回。
 - handler 只做提取与编排，业务逻辑放独立 service（如 `SyncService`）；共享状态以 `Arc` + `Mutex` 经 `with_state` 注入；Axum 路由、CORS 与服务逻辑按功能模块组织。
-- 依赖方向单向：server → domain → contracts，不得反向引用；contracts 变更后必须重跑 `pnpm run types:generate` 并同步前端调用方。
+- 依赖方向单向：`domain` 只依赖 `contracts`，`contracts` 不依赖任何内部 crate——约束的是**下层不得反向引用上层**，而非「只有 server 可以依赖 domain」；`src-tauri/` 与 `crates/server/` 都可以依赖 `domain` 与 `contracts`。contracts 变更后必须重跑 `pnpm run types:generate` 并同步前端调用方。
 - 新行为补测试，`cargo test --workspace` 通过后才算完成。
 
 ### 编程语言

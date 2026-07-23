@@ -651,6 +651,7 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-specta",
  "todo-contracts",
+ "todo-domain",
  "ts-rs",
 ]
 

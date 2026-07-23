@@ -1,3 +1,5 @@
+pub mod ics;
+
 pub use todo_contracts::SyncCursor;
 
 use todo_contracts::{HealthStatus, LogHealth, SyncHealth};

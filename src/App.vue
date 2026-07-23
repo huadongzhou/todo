@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+  type ComponentPublicInstance,
+} from "vue";
 import {
   Check,
   ClipboardList,
@@ -12,6 +20,7 @@ import {
 import Button from "@/components/ui/button/Button.vue";
 import TodayCard from "@/components/TodayCard.vue";
 import type { ThemePreference } from "@/lib/appearance";
+import { canExportCalendar, exportCalendar } from "@/lib/calendar-export";
 import { dueDateTone, formatDueDate, TONE_LABEL_CLASS } from "@/lib/dueDate";
 import {
   closeTodayCard,
@@ -113,13 +122,101 @@ const themeOptions: ReadonlyArray<{
 ];
 
 /**
- * Tones for the storage alert, following the semantic-colour formula in
+ * Tones for the page-level alert, following the semantic-colour formula in
  * DESIGN.md ("100 底 + 700 字" light, "900/40 底 + 300 字" dark).
  */
-const STORAGE_ALERT_CLASS: Record<"warn" | "error", string> = {
+const ALERT_TONE_CLASS: Record<"success" | "warn" | "error", string> = {
+  success: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
   warn: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
   error: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
 };
+
+/** Whether this runtime can write an .ics file at all; fixed for the session. */
+const canExport = canExportCalendar();
+const exporting = ref(false);
+const lastExportedAt = ref<string | null>(null);
+const exportButtonRef = ref<ComponentPublicInstance | null>(null);
+/**
+ * The result of the last export, in the same shape as a storage alert so both
+ * can share one alert element. It stays local to the page rather than going into
+ * a store: it is not part of the todo domain, and nothing outside this view has
+ * anything to say about it.
+ */
+const exportAlert = ref<{ tone: "success" | "warn" | "error"; message: string } | null>(null);
+
+/**
+ * What the single page-level alert says. A storage alert always wins: it is
+ * about data the user may be losing, and a cheerful "exported" line must not
+ * push it off the screen.
+ */
+const pageAlert = computed(() => todoStore.storageAlert ?? exportAlert.value);
+
+// A result the user cannot see any more has nothing left to report, and leaving
+// it behind would show a stale line the next time the panel is opened.
+watch(settingsOpen, (open) => {
+  if (!open) exportAlert.value = null;
+});
+
+/**
+ * Disabling the button while the export runs can leave the focus on `<body>`,
+ * which drops a keyboard or screen-reader user out of the settings panel. Only
+ * that case is corrected — moving focus the user has since placed elsewhere
+ * would be worse than losing it.
+ */
+function restoreExportFocus(): void {
+  if (document.activeElement !== document.body) return;
+  const element = exportButtonRef.value?.$el;
+  if (element instanceof HTMLElement) element.focus();
+}
+
+/** Exports the todos that carry a date, reporting the result in the alert. */
+async function runExport(): Promise<void> {
+  // The button is disabled while this runs, but a keyboard can still fire the
+  // handler twice before the re-render, which would write two files.
+  if (exporting.value) return;
+  exporting.value = true;
+  exportAlert.value = null;
+
+  try {
+    const outcome = await exportCalendar(todoStore.items);
+    let result: { tone: "success" | "warn" | "error"; message: string };
+    if (outcome.kind === "exported") {
+      lastExportedAt.value = new Date().toISOString();
+      // A repeat rule the .ics standard cannot say is exported as a single
+      // event on purpose; saying nothing would leave the user believing their
+      // lunar birthday still repeats in the calendar they just imported.
+      const dropped = outcome.unrepeatableRecurrences;
+      const droppedNote = dropped
+        ? `其中 ${dropped} 项周期任务只导出为单次事件：农历与“每 N 个工作日”无法用日历标准表示。`
+        : "";
+      result = {
+        tone: "success",
+        message: `已导出 ${outcome.eventCount} 项任务：${outcome.path}。${droppedNote}`,
+      };
+    } else if (outcome.kind === "empty") {
+      result = {
+        tone: "warn",
+        message: "没有可导出的任务：先给任务设置截止日或提醒时间，再试一次。",
+      };
+    } else {
+      result = {
+        tone: "error",
+        message: outcome.reason
+          ? `导出失败：${outcome.reason}。请重试或换一个保存位置。`
+          : "导出失败，请重试。",
+      };
+    }
+    // Closing the panel clears the result; a result that arrives after the
+    // panel is already closed is the same case, and showing it anyway would
+    // strand a line on the page with nothing left to clear it — the watcher
+    // below only fires on the moment of closing.
+    if (settingsOpen.value) exportAlert.value = result;
+  } finally {
+    exporting.value = false;
+    await nextTick();
+    restoreExportFocus();
+  }
+}
 
 /** Converts a `datetime-local` input value to an ISO8601 instant (local tz). */
 function toInstant(value: string): string | null {
@@ -184,13 +281,13 @@ function updateTheme(preference: ThemePreference): void {
     </header>
 
     <p
-      v-if="todoStore.storageAlert"
+      v-if="pageAlert"
       class="mb-6 rounded-lg px-3 py-2 text-sm"
-      :class="STORAGE_ALERT_CLASS[todoStore.storageAlert.tone]"
+      :class="ALERT_TONE_CLASS[pageAlert.tone]"
       role="status"
       aria-live="polite"
     >
-      {{ todoStore.storageAlert.message }}
+      {{ pageAlert.message }}
     </p>
 
     <section v-if="settingsOpen" class="surface-card mb-6 p-5" aria-labelledby="settings-heading">
@@ -328,6 +425,36 @@ function updateTheme(preference: ThemePreference): void {
         <p class="mb-0 text-xs text-slate-500 dark:text-slate-400">
           设备 ID：<code class="font-mono">{{ deviceId }}</code>
         </p>
+      </fieldset>
+
+      <!--
+        Hidden rather than disabled where the runtime cannot produce a file: the
+        document is built natively, so the browser dev server has nothing to
+        call, and a control that can only fail explains nothing.
+      -->
+      <fieldset v-if="canExport" class="m-0 mt-6 border-0 p-0" aria-labelledby="calendar-heading">
+        <legend id="calendar-heading" class="mb-3 font-medium text-slate-800 dark:text-slate-200">
+          日历
+        </legend>
+        <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">
+          把设置了截止日或提醒时间的任务导出为 .ics 文件，可导入 Outlook、Google 日历或苹果日历。
+        </p>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <span v-if="lastExportedAt" class="text-xs text-slate-500 dark:text-slate-400"
+            >上次导出：{{ formatSyncTime(lastExportedAt) }}</span
+          >
+          <Button
+            ref="exportButtonRef"
+            type="button"
+            variant="ghost"
+            class="min-h-11 !px-3 text-sm"
+            :disabled="exporting"
+            :aria-busy="exporting"
+            @click="void runExport()"
+          >
+            {{ exporting ? "导出中…" : "导出 .ics" }}
+          </Button>
+        </div>
       </fieldset>
     </section>
 

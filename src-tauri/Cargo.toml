@@ -28,3 +28,4 @@ tauri-plugin-store = "2.4.3"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 ts-rs = "12.0.1"
 todo-contracts = { path = "../crates/contracts" }
+todo-domain = { path = "../crates/domain" }
