@@ -17,4 +17,11 @@ import type { TodoStatus } from "./TodoStatus";
  * filled in and never emptied again — a clear left home as `null`, arrived as
  * "unchanged", and the other devices went on showing the old value.
  */
-export type TodoPatch = { title?: string, status?: TodoStatus, dueDate?: string | null, completedAt?: string | null, reminderAt?: string | null, notes?: string | null, startDate?: string | null, startsAt?: string | null, endsAt?: string | null, estimatedMinutes?: number | null, recurrence?: RecurrenceRule | null, listId?: string | null, important?: boolean | null, urgent?: boolean | null, sortOrder?: number | null, tagIds?: Array<string>, subtasks?: Array<Subtask>, attachments?: Array<Attachment>, dependsOn?: Array<string>, };
+export type TodoPatch = { title?: string, status?: TodoStatus, dueDate?: string | null, completedAt?: string | null, 
+/**
+ * Nested like every other nullable field, and for the sharpest instance of
+ * the reason: restoring an archived task *is* clearing this field, so a
+ * flat option would send that restore as "unchanged" and the task would
+ * stay archived on every other device.
+ */
+archivedAt?: string | null, reminderAt?: string | null, notes?: string | null, startDate?: string | null, startsAt?: string | null, endsAt?: string | null, estimatedMinutes?: number | null, recurrence?: RecurrenceRule | null, listId?: string | null, important?: boolean | null, urgent?: boolean | null, sortOrder?: number | null, tagIds?: Array<string>, subtasks?: Array<Subtask>, attachments?: Array<Attachment>, dependsOn?: Array<string>, };

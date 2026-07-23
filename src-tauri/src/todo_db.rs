@@ -40,7 +40,8 @@ pub struct TodoDb {
 /// * 2 — the v1 task fields: notes, start date, timed block, estimate,
 ///   recurrence, list, Eisenhower axes, manual order, tags, subtasks,
 ///   attachments, dependencies.
-const SCHEMA_VERSION: i64 = 2;
+/// * 3 — archived_at, the instant a completed task was moved out of the list.
+const SCHEMA_VERSION: i64 = 3;
 
 const CREATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY NOT NULL,
@@ -48,6 +49,7 @@ const CREATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS todos (
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     completed_at TEXT,
+    archived_at TEXT,
     due_date TEXT,
     reminder_at TEXT,
     notes TEXT,
@@ -112,24 +114,26 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("subtasks", "TEXT"),
     ("attachments", "TEXT"),
     ("depends_on", "TEXT"),
+    ("archived_at", "TEXT"),
 ];
 
-const SELECT_TODOS: &str = "SELECT id, title, status, created_at, completed_at, due_date,
-    reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes, recurrence, list_id,
-    important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on
+const SELECT_TODOS: &str = "SELECT id, title, status, created_at, completed_at, archived_at,
+    due_date, reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes, recurrence,
+    list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on
     FROM todos
     ORDER BY created_at DESC, id";
 
 const UPSERT_TODO: &str = "INSERT INTO todos (id, title, status, created_at, completed_at,
-    due_date, reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes, recurrence,
-    list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on)
+    archived_at, due_date, reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes,
+    recurrence, list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-        ?20, ?21)
+        ?20, ?21, ?22)
     ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         status = excluded.status,
         created_at = excluded.created_at,
         completed_at = excluded.completed_at,
+        archived_at = excluded.archived_at,
         due_date = excluded.due_date,
         reminder_at = excluded.reminder_at,
         notes = excluded.notes,
@@ -309,6 +313,7 @@ fn row_to_todo(
         status: status_from_text(&status),
         created_at: row.get("created_at")?,
         completed_at: row.get("completed_at")?,
+        archived_at: row.get("archived_at")?,
         due_date: row.get("due_date")?,
         reminder_at: row.get("reminder_at")?,
         notes: row.get("notes")?,
@@ -337,7 +342,7 @@ fn row_to_todo(
 /// Keeps the bytes of every value the read could not make sense of.
 ///
 /// The read degrades to the empty value so one bad column cannot cost the whole
-/// todo — but every `save` writes all 21 columns, so the next write of that
+/// todo — but every `save` writes all 22 columns, so the next write of that
 /// todo would replace those bytes with the empty value and lose them for good.
 /// Parking them first is the same stance the view layer takes with entries it
 /// cannot read (`todos.quarantine`): unreadable is not a reason to delete, so
@@ -507,6 +512,7 @@ impl TodoDb {
                     status_to_text(&todo.status),
                     todo.created_at,
                     todo.completed_at,
+                    todo.archived_at,
                     todo.due_date,
                     todo.reminder_at,
                     todo.notes,
@@ -620,6 +626,7 @@ mod tests {
             status: TodoStatus::Open,
             created_at: created_at.to_owned(),
             completed_at: None,
+            archived_at: None,
             due_date: None,
             reminder_at: None,
             notes: None,
@@ -799,6 +806,33 @@ mod tests {
         assert!(stored[0].tag_ids.is_empty());
         assert!(stored[0].subtasks.is_empty());
         assert_eq!(stored[0].important, None);
+        assert_eq!(stored[0].archived_at, None);
+    }
+
+    #[test]
+    fn an_archive_stamp_survives_being_written_and_cleared_again() {
+        // Restoring writes the same column back to NULL, and a row that could
+        // be archived but never un-archived would strand the task out of sight.
+        let db = memory_db();
+        let mut archived = todo("a", "2026-07-01T00:00:00Z");
+        archived.status = TodoStatus::Completed;
+        archived.completed_at = Some("2026-07-10T09:00:00Z".to_owned());
+        archived.archived_at = Some("2026-07-23T00:00:05Z".to_owned());
+        db.save(&archived).expect("store an archived todo");
+
+        let stored = db.list().expect("list todos").remove(0);
+        assert_eq!(stored.archived_at.as_deref(), Some("2026-07-23T00:00:05Z"));
+        assert_eq!(stored.completed_at.as_deref(), Some("2026-07-10T09:00:00Z"));
+
+        let mut restored = stored;
+        restored.archived_at = None;
+        restored.status = TodoStatus::Open;
+        restored.completed_at = None;
+        db.save(&restored).expect("store the restored todo");
+
+        let read_back = db.list().expect("list todos").remove(0);
+        assert_eq!(read_back.archived_at, None);
+        assert!(matches!(read_back.status, TodoStatus::Open));
     }
 
     #[test]

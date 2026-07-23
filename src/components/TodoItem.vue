@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Check, SlidersHorizontal, Trash2 } from "lucide-vue-next";
+import { Check, Copy, SlidersHorizontal, Trash2 } from "lucide-vue-next";
 import Button from "@/components/ui/button/Button.vue";
 import TodoFields, {
   createEmptyDraft,
@@ -24,7 +24,7 @@ import type { Todo } from "@/types/todo";
  * the list into a wall of forms and scatter the tab order.
  */
 const props = defineProps<{ todo: Todo; editing: boolean }>();
-const emit = defineEmits<{ edit: []; close: [] }>();
+const emit = defineEmits<{ edit: []; close: []; duplicate: [] }>();
 
 const todoStore = useTodoStore();
 
@@ -253,13 +253,33 @@ function cancel(): void {
           </span>
         </p>
       </div>
+      <!--
+        Duplicating is the one of the three new abilities that has to be one
+        click away — its entire value is "make another one like this", and
+        hiding it behind opening the editor would cost more clicks than typing
+        the task again. Archiving has no button at all (a rule does it) and the
+        rollover is a single setting, so the row gains exactly one control.
+      -->
       <Button
         variant="ghost"
-        class="!p-2 text-slate-400 hover:text-red-600"
+        class="min-h-11 min-w-11 !p-2 text-slate-400 dark:hover:text-slate-100"
+        :aria-label="`复制 ${todo.title}`"
+        @click="emit('duplicate')"
+      >
+        <Copy :size="20" />
+      </Button>
+      <!--
+        Brought to the same 44×44 as the button beside it: it was 33×33, under
+        the touch-target floor, and two neighbouring icon buttons of different
+        sizes read as a mistake.
+      -->
+      <Button
+        variant="ghost"
+        class="min-h-11 min-w-11 !p-2 text-slate-400 hover:text-red-600"
         :aria-label="`删除 ${todo.title}`"
         @click="todoStore.remove(todo.id)"
       >
-        <Trash2 :size="17" />
+        <Trash2 :size="20" />
       </Button>
     </template>
   </article>

@@ -559,6 +559,7 @@ mod tests {
             status: TodoStatus::Open,
             created_at: "2026-07-16T00:00:00Z".to_owned(),
             completed_at: None,
+            archived_at: None,
             due_date: None,
             reminder_at: None,
             notes: None,

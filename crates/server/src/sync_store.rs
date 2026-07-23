@@ -1456,6 +1456,7 @@ mod tests {
             status: Some(todo_contracts::TodoStatus::Completed),
             due_date: Some(Some("2026-07-24".to_owned())),
             completed_at: Some(Some("2026-07-23T10:00:00Z".to_owned())),
+            archived_at: Some(Some("2026-07-30T00:00:05Z".to_owned())),
             reminder_at: Some(Some("2026-07-24T09:00:00Z".to_owned())),
             notes: Some(Some("the details".to_owned())),
             start_date: Some(Some("2026-07-22".to_owned())),

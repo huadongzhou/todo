@@ -14,6 +14,14 @@ export const useSettingsStore = defineStore("settings", () => {
   const theme = ref<ThemePreference>("system");
   const closeToTray = ref(true);
   const showTodayCard = ref(false);
+  /**
+   * Whether each new day pulls overdue tasks forward to it.
+   *
+   * Off by default: rewriting a deadline the user set by hand is a change with
+   * consequences, and nothing records what the date used to be, so an app that
+   * did it unasked would leave no way back.
+   */
+  const rolloverOverdue = ref(false);
   const isReady = ref(false);
   const persistenceError = ref<string | null>(null);
   let unsubscribeSystemTheme: (() => void) | undefined;
@@ -37,17 +45,20 @@ export const useSettingsStore = defineStore("settings", () => {
       theme.value = await loadThemePreference();
       closeToTray.value = await loadBooleanPreference("behavior.closeToTray", true);
       showTodayCard.value = await loadBooleanPreference("ui.showTodayCard", false);
+      rolloverOverdue.value = await loadBooleanPreference("behavior.rolloverOverdue", false);
       await applyTheme(theme.value);
       watchSystemTheme();
       writeDiagnostic("info", "Settings restored", {
         theme: theme.value,
         closeToTray: closeToTray.value,
         showTodayCard: showTodayCard.value,
+        rolloverOverdue: rolloverOverdue.value,
       });
     } catch {
       theme.value = "system";
       closeToTray.value = true;
       showTodayCard.value = false;
+      rolloverOverdue.value = false;
       persistenceError.value = "设置恢复失败，已使用系统默认值。";
       // The fallback itself must never throw: `main.ts` awaits `bootstrap()`
       // before mounting, so a second failure here would take the whole UI down
@@ -109,11 +120,29 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  async function setRolloverOverdue(enabled: boolean): Promise<void> {
+    rolloverOverdue.value = enabled;
+    persistenceError.value = null;
+
+    try {
+      await saveBooleanPreference("behavior.rolloverOverdue", enabled);
+      writeDiagnostic("info", "Rollover-overdue preference updated", {
+        rolloverOverdue: enabled,
+      });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Rollover-overdue preference could not be persisted", {
+        rolloverOverdue: enabled,
+      });
+    }
+  }
+
   return {
     theme,
     themeLabel,
     closeToTray,
     showTodayCard,
+    rolloverOverdue,
     isDesktop,
     isReady,
     persistenceError,
@@ -121,5 +150,6 @@ export const useSettingsStore = defineStore("settings", () => {
     setTheme,
     setCloseToTray,
     setShowTodayCard,
+    setRolloverOverdue,
   };
 });

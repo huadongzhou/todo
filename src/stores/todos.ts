@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import type { Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import type { PageAlert } from "@/lib/page-alert";
+import { daysSinceLocalDay, isOverdue, todayLocalDay } from "@/lib/dueDate";
 import { normalizeNotes, normalizeTitle } from "@/lib/todo-normalize";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
@@ -49,6 +50,7 @@ type FieldChange = Pick<
   | "title"
   | "status"
   | "completedAt"
+  | "archivedAt"
   | "dueDate"
   | "reminderAt"
   | "notes"
@@ -108,6 +110,7 @@ function patchFromTodo(todo: Todo): TodoPatch {
     title: todo.title,
     status: todo.status,
     completedAt: todo.completedAt,
+    archivedAt: todo.archivedAt ?? null,
     dueDate: todo.dueDate ?? null,
     reminderAt: todo.reminderAt ?? null,
     notes: todo.notes ?? null,
@@ -158,6 +161,30 @@ export const useTodoStore = defineStore("todos", () => {
   const items = ref<Todo[]>([]);
   const activeItems = computed(() => items.value.filter((todo) => todo.status === "open"));
   const completedItems = computed(() => items.value.filter((todo) => todo.status === "completed"));
+  /**
+   * The todos the list shows: everything that has not been archived.
+   *
+   * The one reading of "archived", so that every view built on the list — the
+   * date groups, the export, whatever comes next — filters the same way rather
+   * than each repeating the test and eventually disagreeing about it.
+   */
+  const visibleItems = computed(() => items.value.filter((todo) => !todo.archivedAt));
+  /**
+   * The archived todos, most recently archived first — which is the order the
+   * one thing anybody comes here for wants: the task just archived by mistake.
+   *
+   * `filter` hands back a new array, so the sort never touches the stored list.
+   */
+  const archivedItems = computed(() =>
+    items.value
+      .filter((todo) => Boolean(todo.archivedAt))
+      .sort((left, right) => {
+        const earlier = left.archivedAt ?? "";
+        const later = right.archivedAt ?? "";
+        if (earlier === later) return 0;
+        return earlier < later ? 1 : -1;
+      }),
+  );
   const repository = todoRepository();
 
   // Where the writes this session issued actually landed. The repository can
@@ -273,6 +300,7 @@ export const useTodoStore = defineStore("todos", () => {
       status: "open",
       createdAt: new Date().toISOString(),
       completedAt: null,
+      archivedAt: null,
       dueDate: fields.dueDate ?? null,
       reminderAt: fields.reminderAt ?? null,
       notes: normalizeNotes(fields.notes),
@@ -304,6 +332,7 @@ export const useTodoStore = defineStore("todos", () => {
           dueDate: todo.dueDate,
           reminderAt: todo.reminderAt,
           completedAt: todo.completedAt,
+          archivedAt: todo.archivedAt,
           notes: todo.notes,
           startDate: todo.startDate,
           startsAt: todo.startsAt,
@@ -313,6 +342,9 @@ export const useTodoStore = defineStore("todos", () => {
         todo.createdAt,
       ),
     );
+    // Creating does not go on the undo stack (see `recordHistory`), but it is
+    // still the user stepping forward, so the redone future is unreachable.
+    redoStack.length = 0;
     return true;
   }
 
@@ -409,6 +441,21 @@ export const useTodoStore = defineStore("todos", () => {
    * Only called once the change has actually landed, which is what makes every
    * entry in the stack correspond to a visible difference: press undo and
    * something changes, every time.
+   *
+   * Two rules decide what reaches this function, and both are about the user
+   * rather than about the data:
+   *
+   *   - **On the undo stack** goes what the user did here by hand *to a todo
+   *     that already existed* — completing, editing, deleting, restoring from
+   *     the archive. Creating a row (adding, duplicating) does not: undoing it
+   *     would remove the row the focus is currently inside, and this stack has
+   *     no way to say where the focus should land instead.
+   *   - **Clearing the redo stack** is the wider rule: anything the user does
+   *     by hand clears it, whether or not it was filed here — which is why
+   *     `add` and `duplicate` clear it themselves. What must *not* clear it is
+   *     what the user did not do: the day-start pass and inbound sync, since a
+   *     background rule making Ctrl+Y stop working is indistinguishable from a
+   *     bug.
    */
   function recordHistory(entry: HistoryEntry): void {
     undoStack.push(entry);
@@ -522,6 +569,171 @@ export const useTodoStore = defineStore("todos", () => {
   }
 
   /**
+   * Copies a todo as a fresh task to be done again, placed right below the one
+   * it came from, and answers with the new id.
+   *
+   * "To be done again" is the whole rule this reads by: what describes the task
+   * — what it is, when it is due, which list and tags it belongs to — comes
+   * across, and what describes *this record* — who it is, how far it got, where
+   * it sits — starts over. Every field of the contract is named below, so a
+   * field added later and forgotten here is a compile error rather than a value
+   * the copy quietly loses.
+   */
+  function duplicate(id: string): string | null {
+    const index = items.value.findIndex((item) => item.id === id);
+    const source = items.value[index];
+    if (!source) return null;
+
+    const copy: Todo = {
+      id: newId(),
+      title: source.title,
+      // A copy of a finished task is a task to do, not a second record of
+      // having done it.
+      status: "open",
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+      archivedAt: null,
+      dueDate: source.dueDate ?? null,
+      // Kept even when it has already passed: clearing it silently would read
+      // as a reminder that did not come across.
+      reminderAt: source.reminderAt ?? null,
+      notes: source.notes ?? null,
+      startDate: source.startDate ?? null,
+      startsAt: source.startsAt ?? null,
+      endsAt: source.endsAt ?? null,
+      estimatedMinutes: source.estimatedMinutes ?? null,
+      recurrence: source.recurrence ?? null,
+      listId: source.listId ?? null,
+      // `null` means "the user has not said", so it is carried as `null` rather
+      // than answered on their behalf.
+      important: source.important ?? null,
+      urgent: source.urgent ?? null,
+      // Where a new row sits is decided by where it is inserted; inheriting the
+      // source's manual position would have two rows claim one place.
+      sortOrder: null,
+      // A new array pointing at the same shared tags.
+      tagIds: [...source.tagIds],
+      // The steps come across to be done again, each under an id of its own:
+      // two todos holding a subtask with the same id make "the subtask with
+      // this id" an ambiguous thing to say.
+      subtasks: source.subtasks.map((subtask) => ({ ...subtask, id: newId(), done: false })),
+      // The reference is copied, not the file behind it.
+      attachments: source.attachments.map((attachment) => ({ ...attachment, id: newId() })),
+      // The one collection deliberately left behind: a dependency is this
+      // task's position in the graph, not part of what the task says.
+      dependsOn: [],
+    };
+
+    if (!insertTodo(copy, index + 1)) return null;
+    // Creating does not go on the undo stack, but it is still the user moving
+    // forward — see `recordHistory`.
+    redoStack.length = 0;
+    return copy.id;
+  }
+
+  /**
+   * Takes a todo back out of the archive.
+   *
+   * Restoring also un-completes it, which is not what the word says and is said
+   * in the UI for that reason. It is nonetheless the only correct reading: a
+   * todo restored as "completed a fortnight ago" meets the archive rule the
+   * moment it is checked again and disappears a second time, so the user would
+   * watch their task blink and vanish.
+   *
+   * The guard is what `update` gets from comparing against the stored values: a
+   * call that would write nothing files no undo entry.
+   */
+  function unarchive(id: string) {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo?.archivedAt) return;
+
+    const before: FieldChange = {
+      archivedAt: todo.archivedAt,
+      status: todo.status,
+      completedAt: todo.completedAt,
+    };
+    const after: FieldChange = { archivedAt: null, status: "open", completedAt: null };
+
+    if (!applyChange(id, after)) return;
+    recordHistory({ kind: "change", id, before, after });
+  }
+
+  /**
+   * How long a finished task stays in the list before it is archived.
+   *
+   * A week, because that is the span the app already counts in — a task
+   * completed within it is still part of "this week" and is what a user
+   * looking back expects to find; past it, it is history. Fixed rather than
+   * configurable: the setting would ask everyone to have an opinion about a
+   * number that only decides when a row leaves a list it can be brought back
+   * from.
+   */
+  const ARCHIVE_AFTER_DAYS = 7;
+
+  /** What one day-start pass may do, and to which rows it may not. */
+  interface DayStartOptions {
+    readonly rolloverOverdue: boolean;
+    /**
+     * The row open for editing, if any. Both rules step over it: changing a
+     * field underneath an open form leaves the draft holding the old value,
+     * and saving would write the rule's change straight back out — an edit the
+     * user never made and never saw.
+     */
+    readonly skipId: string | null;
+  }
+
+  /**
+   * The two rules a new day brings, in one pass: archive what has been done
+   * long enough, then pull overdue tasks forward to today.
+   *
+   * They cannot collide — archiving only ever looks at completed todos and the
+   * rollover only at open ones — so one walk of the list does both.
+   *
+   * Neither writes history: both go through `applyChange`, the layer below the
+   * undo stack. A pass can touch dozens of rows, which would push everything
+   * the user actually did out of a 50-deep stack, and undoing something one
+   * never did is worse than an undo that does nothing.
+   */
+  function runDayStart(options: DayStartOptions): void {
+    const today = todayLocalDay();
+    let archived = 0;
+    let rolledOver = 0;
+
+    // Safe to walk in place: both rules write fields onto a row through
+    // `applyChange`, and neither adds or removes one — archiving is a stamp on
+    // the todo, not a move to another list.
+    for (const todo of items.value) {
+      if (todo.id === options.skipId) continue;
+      // Already out of the list: neither rule has anything to say about it.
+      if (todo.archivedAt) continue;
+
+      if (todo.status === "completed") {
+        // Nothing to measure "how long ago" against. This combination only
+        // arrives from another device, and archiving it on a guess would be
+        // deciding something that device did not.
+        if (!todo.completedAt) continue;
+        const days = daysSinceLocalDay(todo.completedAt);
+        if (days === null || days < ARCHIVE_AFTER_DAYS) continue;
+        if (applyChange(todo.id, { archivedAt: new Date().toISOString() })) archived += 1;
+        continue;
+      }
+
+      if (!options.rolloverOverdue) continue;
+      // A task with no deadline cannot be overdue, and inventing one for it
+      // would overwrite a deliberate choice with today's date.
+      if (!isOverdue(todo.dueDate, false)) continue;
+      // The deadline and nothing else: a reminder is an absolute instant, a
+      // timed block is time actually set aside, and moving those along would be
+      // rearranging the user's day rather than moving one date.
+      if (applyChange(todo.id, { dueDate: today })) rolledOver += 1;
+    }
+
+    if (archived > 0 || rolledOver > 0) {
+      writeDiagnostic("info", "Day-start rules applied", { archived, rolledOver });
+    }
+  }
+
+  /**
    * Applies a remote upsert change (server-wins, field-level). Creates the todo
    * if it is unknown locally. Does NOT record a sync operation — this is the
    * inbound half of sync, so recording would loop.
@@ -544,6 +756,7 @@ export const useTodoStore = defineStore("todos", () => {
       if (patch?.status !== undefined) existing.status = patch.status;
       if (patch?.dueDate !== undefined) existing.dueDate = patch.dueDate;
       if (patch?.completedAt !== undefined) existing.completedAt = patch.completedAt;
+      if (patch?.archivedAt !== undefined) existing.archivedAt = patch.archivedAt;
       if (patch?.reminderAt !== undefined) existing.reminderAt = patch.reminderAt;
       if (patch?.notes !== undefined) existing.notes = patch.notes;
       if (patch?.startDate !== undefined) existing.startDate = patch.startDate;
@@ -572,6 +785,7 @@ export const useTodoStore = defineStore("todos", () => {
         status: patch.status ?? "open",
         createdAt: occurredAt,
         completedAt: patch.completedAt ?? null,
+        archivedAt: patch.archivedAt ?? null,
         dueDate: patch.dueDate ?? null,
         reminderAt: patch.reminderAt ?? null,
         notes: patch.notes ?? null,
@@ -616,6 +830,8 @@ export const useTodoStore = defineStore("todos", () => {
     items,
     activeItems,
     completedItems,
+    visibleItems,
+    archivedItems,
     storageAlert,
     notePendingWrites,
     hydrate,
@@ -623,6 +839,9 @@ export const useTodoStore = defineStore("todos", () => {
     update,
     toggle,
     remove,
+    duplicate,
+    unarchive,
+    runDayStart,
     undo,
     redo,
     applyRemoteUpsert,

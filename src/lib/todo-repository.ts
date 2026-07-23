@@ -246,6 +246,7 @@ const TODO_FIELDS = {
     accepts: (value: unknown) => value === null || typeof value === "string",
     required: true,
   },
+  archivedAt: { accepts: isOptionalString },
   dueDate: { accepts: isOptionalString },
   reminderAt: { accepts: isOptionalString },
   notes: { accepts: isOptionalString },

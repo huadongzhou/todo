@@ -19,6 +19,38 @@ function dayDifference(dueDate: string): number {
   return Math.round((due.getTime() - todayLocal.getTime()) / MS_PER_DAY);
 }
 
+/** A date read as the local calendar day it falls on (`YYYY-MM-DD`). */
+function localDayKey(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * Today, as the same `YYYY-MM-DD` key a due date is written in.
+ *
+ * Exported so that "roll this task over to today" and "which day is it" are one
+ * answer rather than two: everything that has to name today goes through the
+ * `dayDifference` below, which is the only reading of the calendar in the app.
+ */
+export function todayLocalDay(): string {
+  return localDayKey(new Date());
+}
+
+/**
+ * Whole local calendar days from the day an instant fell on to today, or `null`
+ * when the instant cannot be read.
+ *
+ * Calendar days, not elapsed hours: "completed 7 days ago" has to mean the same
+ * thing whether the task was finished at 09:00 or at 23:59, which is exactly
+ * what a duration in milliseconds would get wrong either side of a day boundary.
+ */
+export function daysSinceLocalDay(instant: string): number | null {
+  const parsed = new Date(instant);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return -dayDifference(localDayKey(parsed));
+}
+
 export function isOverdue(dueDate: string | null | undefined, completed: boolean): boolean {
   if (!dueDate || completed) return false;
   return dayDifference(dueDate) < 0;

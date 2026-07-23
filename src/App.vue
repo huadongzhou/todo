@@ -9,12 +9,14 @@ import {
   type ComponentPublicInstance,
 } from "vue";
 import { Check, ClipboardList, Plus, Settings2, SlidersHorizontal, X } from "lucide-vue-next";
+import ArchiveSection from "@/components/ArchiveSection.vue";
 import Button from "@/components/ui/button/Button.vue";
 import TodayCard from "@/components/TodayCard.vue";
 import TodoFields, { createEmptyDraft, type TodoDraft } from "@/components/TodoFields.vue";
 import TodoItem from "@/components/TodoItem.vue";
 import type { ThemePreference } from "@/lib/appearance";
 import { canExportCalendar, exportCalendar } from "@/lib/calendar-export";
+import { registerDayRollover } from "@/lib/day-rollover";
 import { formAlert } from "@/lib/form-alert";
 import { pickPageAlert, type PageAlert } from "@/lib/page-alert";
 import {
@@ -53,6 +55,7 @@ const todoStore = useTodoStore();
 const settingsStore = useSettingsStore();
 let stopTodayCardSync: (() => void) | undefined;
 let stopUndoShortcut: (() => void) | undefined;
+let stopDayRollover: (() => void) | undefined;
 /**
  * The whole draft, as one object. The page never touches a field inside it: it
  * hands it to <TodoFields> to be filled in, hands it to the store to be saved,
@@ -103,6 +106,15 @@ onMounted(async () => {
     isSuspended: () => editingId.value !== null,
   });
 
+  // The rules a new day brings. Registered here rather than at startup because
+  // the row being edited is the page's to know, and both rules step over it.
+  stopDayRollover = registerDayRollover(() => {
+    todoStore.runDayStart({
+      rolloverOverdue: settingsStore.rolloverOverdue,
+      skipId: editingId.value,
+    });
+  });
+
   const registered = await registerShortcuts({ toggleQuickAdd });
   if (registered.length > 0) activeShortcut.value = registered[0];
 
@@ -115,6 +127,7 @@ onBeforeUnmount(() => {
   void unregisterShortcuts();
   stopUndoShortcut?.();
   stopTodayCardSync?.();
+  stopDayRollover?.();
 });
 
 // Opening the setting raises the card; closing it tears the card down. We check
@@ -207,7 +220,10 @@ async function runExport(): Promise<void> {
   exportAlert.value = null;
 
   try {
-    const outcome = await exportCalendar(todoStore.items);
+    // The archive is left out: "no longer worth seeing" and "put it in my
+    // calendar" are opposite instructions, and everything in there is finished
+    // history anyway.
+    const outcome = await exportCalendar(todoStore.visibleItems);
     // Every export result is `transient`: closing the settings panel ends it,
     // whatever it says, so it never sits on top of a standing alert for long.
     let result: PageAlert;
@@ -283,6 +299,25 @@ function submit(): void {
 
 function updateTheme(preference: ThemePreference): void {
   void settingsStore.setTheme(preference);
+}
+
+/**
+ * Copies a row and opens the copy for editing.
+ *
+ * Opening the editor is what answers "which one is the new one" without a
+ * "copy of" suffix in the title: the form is on it and the cursor is in it. It
+ * also saves the click a copy usually needs anyway, and gives a screen reader
+ * something to announce — a row quietly appearing in a list announces nothing.
+ */
+async function duplicateTodo(id: string): Promise<void> {
+  const created = todoStore.duplicate(id);
+  if (!created) return;
+  // The row has to exist before it is told to open. A row that mounts with the
+  // editor already on never sees the change that fills its draft, so it comes
+  // up as an empty form with no title and no focus; one tick later it is an
+  // ordinary row being opened, which is the path every other edit takes.
+  await nextTick();
+  editingId.value = created;
 }
 </script>
 
@@ -383,6 +418,48 @@ function updateTheme(preference: ThemePreference): void {
         当前：{{ settingsStore.themeLabel }}
         <span v-if="settingsStore.persistenceError"> · {{ settingsStore.persistenceError }}</span>
       </p>
+
+      <!--
+        No `isDesktop` gate: how tasks behave is not a desktop capability, and
+        the phone needs the rollover at least as much as the desktop does. It
+        sits above the platform-specific groups for that reason.
+      -->
+      <fieldset class="m-0 mt-6 border-0 p-0" aria-labelledby="task-behavior-heading">
+        <legend
+          id="task-behavior-heading"
+          class="mb-3 font-medium text-slate-800 dark:text-slate-200"
+        >
+          任务
+        </legend>
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.rolloverOverdue"
+            @change="settingsStore.setRolloverOverdue(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100"
+              >逾期任务自动顺延到今天</span
+            >
+            <!--
+              "顺延" sounds like the whole task moves; it does not, and saying
+              which parts stay is cheaper than letting the user find out.
+            -->
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >每天开始时，把逾期未完成任务的截止日改为今天。提醒时间与时间段不变。</span
+            >
+          </span>
+        </label>
+        <!--
+          Archiving has no control of its own — a rule performs it — so this is
+          where the user finds out that it happens and where the results went.
+        -->
+        <p class="mb-0 px-3 text-xs text-slate-500 dark:text-slate-400">
+          已完成超过 7 天的任务会自动归档，可在列表下方“已归档”中查看与还原。
+        </p>
+      </fieldset>
 
       <fieldset
         v-if="settingsStore.isDesktop"
@@ -560,14 +637,15 @@ function updateTheme(preference: ThemePreference): void {
 
     <section aria-labelledby="todo-list-heading">
       <h2 id="todo-list-heading" class="sr-only">待办列表</h2>
-      <div v-if="todoStore.items.length" class="surface-card overflow-hidden">
+      <div v-if="todoStore.visibleItems.length" class="surface-card overflow-hidden">
         <TodoItem
-          v-for="todo in todoStore.items"
+          v-for="todo in todoStore.visibleItems"
           :key="todo.id"
           :todo="todo"
           :editing="editingId === todo.id"
           @edit="editingId = todo.id"
           @close="editingId = null"
+          @duplicate="void duplicateTodo(todo.id)"
         />
       </div>
       <div v-else class="surface-card grid place-items-center px-6 py-16 text-center">
@@ -580,5 +658,12 @@ function updateTheme(preference: ThemePreference): void {
         <p class="mb-0 mt-1 text-sm text-slate-500 dark:text-slate-400">从上方添加第一项任务吧。</p>
       </div>
     </section>
+
+    <!--
+      One line, and everything it needs is in the store: the day there is a
+      navigation shell, this line moves into a page of its own and the component
+      does not change.
+    -->
+    <ArchiveSection />
   </main>
 </template>

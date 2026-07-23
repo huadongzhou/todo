@@ -40,6 +40,18 @@ pub struct Todo {
     pub status: TodoStatus,
     pub created_at: String,
     pub completed_at: Option<String>,
+    /// When the task was archived: "done long enough that it need not be seen
+    /// any more".
+    ///
+    /// A field of its own rather than a third `TodoStatus` variant, because
+    /// archiving and completing are orthogonal. A status can only say one thing
+    /// at a time, so folding the two together would lose "it was completed, and
+    /// then archived" — and every reader of the status (the open count, the
+    /// completed set, the statistics still to come) would have to be redefined
+    /// to keep meaning what it means today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub archived_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub due_date: Option<String>,
@@ -340,6 +352,13 @@ pub struct TodoPatch {
     #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<String>", optional = nullable)]
     pub completed_at: Option<Option<String>>,
+    /// Nested like every other nullable field, and for the sharpest instance of
+    /// the reason: restoring an archived task *is* clearing this field, so a
+    /// flat option would send that restore as "unchanged" and the task would
+    /// stay archived on every other device.
+    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional = nullable)]
+    pub archived_at: Option<Option<String>>,
     #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<String>", optional = nullable)]
     pub reminder_at: Option<Option<String>>,
@@ -779,6 +798,7 @@ mod tests {
             status: TodoStatus::Open,
             created_at: "2026-07-16T00:00:00Z".to_owned(),
             completed_at: None,
+            archived_at: None,
             due_date: None,
             reminder_at: None,
             notes: None,
@@ -836,7 +856,52 @@ mod tests {
         assert!(decoded.depends_on.is_empty());
         assert_eq!(decoded.important, None);
         assert!(decoded.recurrence.is_none());
+        assert!(decoded.archived_at.is_none());
         decoded.validate().expect("a v1 payload stays valid");
+    }
+
+    #[test]
+    fn archiving_and_completing_are_carried_separately() {
+        // The pair a third status variant could not express: completed at one
+        // instant, archived at a later one, with both facts still readable.
+        let mut archived = todo();
+        archived.status = TodoStatus::Completed;
+        archived.completed_at = Some("2026-07-16T10:00:00Z".to_owned());
+        archived.archived_at = Some("2026-07-23T00:00:05Z".to_owned());
+        archived.validate().expect("an archived todo is valid");
+
+        let encoded = serde_json::to_string(&archived).expect("encode");
+        assert!(encoded.contains("\"archivedAt\":\"2026-07-23T00:00:05Z\""));
+        let decoded: Todo = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded.completed_at.as_deref(), Some("2026-07-16T10:00:00Z"));
+        assert_eq!(decoded.archived_at.as_deref(), Some("2026-07-23T00:00:05Z"));
+    }
+
+    #[test]
+    fn restoring_a_todo_travels_as_a_cleared_archive_stamp() {
+        // What "restore" puts on the wire. Were `archived_at` a flat option the
+        // `null` would arrive as "unchanged" and the task would stay archived
+        // everywhere else — the one failure this field's shape exists to stop.
+        let raw = r#"{"status":"open","archivedAt":null,"completedAt":null}"#;
+        let decoded: TodoPatch = serde_json::from_str(raw).expect("decode a restore");
+        assert_eq!(decoded.archived_at, Some(None));
+
+        let encoded = serde_json::to_string(&decoded).expect("encode");
+        assert!(encoded.contains("\"archivedAt\":null"));
+
+        let again: TodoPatch = serde_json::from_str(&encoded).expect("decode again");
+        assert_eq!(again.archived_at, Some(None));
+
+        // Archiving is the same field carrying a value, and a patch that says
+        // nothing about it still means "leave it alone".
+        let archiving: TodoPatch =
+            serde_json::from_str(r#"{"archivedAt":"2026-07-23T00:00:05Z"}"#).expect("decode");
+        assert_eq!(
+            archiving.archived_at,
+            Some(Some("2026-07-23T00:00:05Z".to_owned()))
+        );
+        let untouched: TodoPatch = serde_json::from_str(r#"{"title":"unrelated"}"#).expect("decode");
+        assert_eq!(untouched.archived_at, None);
     }
 
     #[test]

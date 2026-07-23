@@ -14,7 +14,19 @@ import type { TodoStatus } from "./TodoStatus";
  * repository has no version negotiation by design (AGENTS.md), so bindings are
  * regenerated and callers are updated together with the contract.
  */
-export type Todo = { id: string, title: string, status: TodoStatus, createdAt: string, completedAt: string | null, dueDate?: string | null, reminderAt?: string | null, 
+export type Todo = { id: string, title: string, status: TodoStatus, createdAt: string, completedAt: string | null, 
+/**
+ * When the task was archived: "done long enough that it need not be seen
+ * any more".
+ *
+ * A field of its own rather than a third `TodoStatus` variant, because
+ * archiving and completing are orthogonal. A status can only say one thing
+ * at a time, so folding the two together would lose "it was completed, and
+ * then archived" — and every reader of the status (the open count, the
+ * completed set, the statistics still to come) would have to be redefined
+ * to keep meaning what it means today.
+ */
+archivedAt?: string | null, dueDate?: string | null, reminderAt?: string | null, 
 /**
  * Free-text description, searchable alongside the title.
  */

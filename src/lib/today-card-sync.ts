@@ -1,5 +1,6 @@
 import { watch } from "vue";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { todayLocalDay } from "@/lib/dueDate";
 import { useTodoStore } from "@/stores/todos";
 import type { Todo } from "@/types/todo";
 
@@ -30,26 +31,24 @@ export interface TodayCardTodo {
   readonly status: "open" | "completed";
 }
 
-/** Local calendar-day key (`YYYY-MM-DD`) for "today" in the user's timezone. */
-function todayKey(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 /**
  * Today's open todos: unfinished items whose deadline is today or earlier.
  * `YYYY-MM-DD` strings compare lexicographically in chronological order, so a
  * plain `<=` correctly captures overdue + due-today.
+ *
+ * Archived todos are left out for the same reason the main list leaves them
+ * out. This device never produces an archived todo that is still open, but
+ * another one can send one in, and a card showing a task the list does not is
+ * two answers to the same question.
  */
 export function selectTodayOpenTodos(items: Todo[]): TodayCardTodo[] {
-  const today = todayKey();
+  const today = todayLocalDay();
   // The filter guarantees `dueDate` is a non-empty string; map it to the
   // card's `string | null` shape so the optional `Todo.dueDate` is narrowed.
   return items
-    .filter((todo) => todo.status === "open" && todo.dueDate && todo.dueDate <= today)
+    .filter(
+      (todo) => todo.status === "open" && !todo.archivedAt && todo.dueDate && todo.dueDate <= today,
+    )
     .map((todo) => ({
       id: todo.id,
       title: todo.title,

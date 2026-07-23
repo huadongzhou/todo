@@ -6,8 +6,19 @@ import { writeDiagnostic } from "@/lib/diagnostics";
 const STORE_FILE = "settings.json";
 const THEME_KEY = "appearance.theme";
 
+/**
+ * Reads a stored boolean back, whichever of the two stores it came from.
+ *
+ * The native store keeps a real boolean; the browser fallback can only keep the
+ * string `saveBooleanPreference` wrote it as. Accepting only the boolean made
+ * every browser-stored preference fall back to its default on reload, so a
+ * toggle switched off came back on — a setting that silently would not stick.
+ */
 function asBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
 }
 
 function isThemePreference(value: unknown): value is ThemePreference {
