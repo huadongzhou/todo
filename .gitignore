@@ -13,6 +13,11 @@ target/
 .env.*
 !.env.example
 
+# Sync server database (default DATABASE_PATH, with its WAL sidecars)
+todo-server.db
+todo-server.db-wal
+todo-server.db-shm
+
 # Other files and folders
 .settings/
 

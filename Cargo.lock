@@ -4198,7 +4198,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "http",
+ "rusqlite",
  "serde",
+ "serde_json",
  "time",
  "todo-contracts",
  "todo-domain",
