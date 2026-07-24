@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>统一创建与编辑界面 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01 / 02 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01 · 02 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 侧栏 / 输入底衬 */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --input-bg: #f1f5f9;       /* slate-100 表单输入底（TodoFields CONTROL_CLASS bg-slate-100） */
+    --input-hover: #e2e8f0;    /* slate-200 未选 chip hover（RecurrenceField hover:bg-slate-200） */
+    --opt-hover: #f8fafc;      /* slate-50 选项行 hover（RecurrenceField hover:bg-slate-50） */
+    --label: #64748b;          /* slate-500 表单 label（TodoFields LABEL_CLASS text-slate-500） */
+    --row-divider: #f1f5f9;    /* slate-100 行分隔 / 区块分隔（border-slate-100） */
+    --circle-border: #cbd5e1;  /* slate-300 完成圈描边 */
+    --icon-muted: #94a3b8;     /* slate-400 图标默认（text-slate-400） */
+    --icon-hover: #020617;     /* slate-950 图标 hover */
+    --danger-fg: #dc2626;      /* red-600 删除 hover 语义 */
+    --err-text: #dc2626;       /* red-600 字段错误文字（TodoFields text-red-600） */
+    /* ghost 按钮（Button.vue：text-slate-600 / hover:bg-slate-100 / hover:text-slate-950） */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（DESIGN.md 语义色，浅色「100 底 + 700 字」；与 01 · 02 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700 */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --border: #1e293b;         /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --input-bg: #0f172a;       /* slate-900（dark:bg-slate-900） */
+    --input-hover: #334155;    /* slate-700（dark:hover:bg-slate-700） */
+    --opt-hover: #0f172a;      /* slate-900（dark:hover:bg-slate-900） */
+    --label: #94a3b8;          /* slate-400（dark:text-slate-400） */
+    --row-divider: #1e293b;    /* slate-800 */
+    --circle-border: #475569;  /* slate-600 */
+    --icon-muted: #94a3b8;     /* slate-400 */
+    --icon-hover: #f8fafc;     /* slate-100 */
+    --danger-fg: #f87171;      /* red-400 */
+    --err-text: #f87171;       /* red-400（dark:text-red-400） */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+
+  /* ===== 抬头（与 01 · 02 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* 居中舞台：表单容器聚焦在 880px 内，贴近真实桌面表单宽度 */
+  .stage { max-width: 880px; margin: 0 auto; }
+
+  /* 区块标题条（与 01 section-title 同款） */
+  .section-title { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 16px; }
+  .section-title .idx {
+    font-size: 12px; font-weight: 600; color: #fff; background: #0ea5e9;
+    border-radius: 6px; padding: 2px 8px; letter-spacing: 0.04em;
+  }
+  .section-title h2 { font-size: 24px; line-height: 1.25; font-weight: 600; margin: 0; }
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+  .container-note { font-size: 12px; color: var(--text-secondary); margin: 0 0 14px; }
+
+  /* ===== 表单容器外壳 ===== */
+  .form-card { padding: 24px; margin-bottom: 24px; }
+
+  /* 首行标题 + actions */
+  .title-row { display: flex; align-items: flex-end; gap: 8px; }
+  .title-col { flex: 1; min-width: 0; }
+  .label-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .field-label { font-size: 12px; font-weight: 500; color: var(--label); }
+  .counter { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--label); }
+  .counter.at-limit { color: var(--soon-fg); }
+
+  /* 表单控件（逐字对齐 TodoFields CONTROL_CLASS：min-h-11 rounded-lg 无边框 bg-slate-100 sm:text-sm） */
+  .ctrl {
+    display: flex; align-items: center; gap: 8px;
+    min-height: 44px; width: 100%; border-radius: 8px; border: none;
+    background: var(--input-bg); color: var(--text);
+    font-family: inherit; font-size: 14px; padding: 10px 12px; outline: none;
+  }
+  .ctrl .ph { color: var(--icon-muted); }             /* placeholder text-slate-400 */
+  .ctrl .val { flex: 1; min-width: 0; }
+  .ctrl .adorn { color: var(--icon-muted); flex: none; } /* 原生控件右侧图标示意 */
+  .ctrl.is-focus { box-shadow: 0 0 0 2px var(--input-bg), 0 0 0 4px #0ea5e9; } /* focus:ring-2 ring-sky-500（无 offset，环贴控件） */
+  .ctrl.textarea { align-items: flex-start; min-height: 84px; }
+  .ctrl.num { width: 120px; }                          /* estimate / interval 窄框 */
+  select.ctrl { -webkit-appearance: none; appearance: none; }
+
+  /* actions（展开 slider + 添加 / 收起） */
+  .icon-square {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: 8px; border: none; background: transparent;
+    color: var(--ghost-text); cursor: pointer; flex: none;
+  }
+  .icon-square.is-hover { background: var(--ghost-hover-bg); color: var(--ghost-hover-text); }
+  .btn-add {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 44px; padding: 0 16px; border: none; border-radius: 8px;
+    background: #0ea5e9; color: #fff; font-family: inherit; font-size: 14px; font-weight: 500;
+    cursor: pointer; flex: none;
+  }
+  .btn-ghost {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 44px; padding: 8px 16px; border: none; border-radius: 8px;
+    background: transparent; color: var(--ghost-text);
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .btn-ghost.is-hover { background: var(--ghost-hover-bg); color: var(--ghost-hover-text); }
+
+  /* 详情区：内容 / 时间 / 归类 分组 */
+  .details { margin-top: 16px; border-top: 1px solid var(--row-divider); padding-top: 16px; display: grid; gap: 16px; }
+  .group { margin: 0; border: 0; padding: 0; }
+  .legend { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 8px; }
+  .dark .legend { color: var(--text); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .col-full { grid-column: 1 / -1; }
+  .field { display: block; }
+  .sub-legend { font-size: 12px; font-weight: 500; color: var(--label); display: block; margin-bottom: 4px; }
+  .note-text { font-size: 12px; color: var(--soon-fg); margin: 4px 0 0; line-height: 1.5; }  /* amber 提示 */
+  .hint-text { font-size: 12px; color: var(--label); margin: 4px 0 0; line-height: 1.5; }     /* slate 摘要 */
+  .err-text { font-size: 12px; color: var(--err-text); margin: 4px 0 0; line-height: 1.5; }   /* red 校验 */
+
+  /* 渐进式重复子控件 */
+  .stack { display: grid; gap: 12px; }
+  .inline-num { display: flex; align-items: center; gap: 8px; }
+  .inline-num .unit { font-size: 14px; color: var(--label); }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 44px; min-width: 44px; padding: 0 12px; border-radius: 8px; border: none;
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+    background: var(--input-bg); color: var(--normal-fg);
+  }
+  .chip.on { background: #0ea5e9; color: #fff; font-weight: 600; }
+  .chip.is-focus { box-shadow: 0 0 0 2px var(--ring-offset), 0 0 0 4px #0ea5e9; }
+  .opt-row {
+    display: flex; align-items: center; gap: 12px; min-height: 44px;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+  }
+  .opt-row:hover { background: var(--opt-hover); }
+  .opt-row input { accent-color: #0ea5e9; width: 18px; height: 18px; }
+  .opt-row .opt-lbl { font-size: 14px; color: var(--text); }
+  .opt-indent { padding-left: 12px; }
+
+  /* 提醒多点行 */
+  .rem-row { display: flex; align-items: center; gap: 8px; }
+  .rem-row .ctrl { flex: 1; }
+
+  /* 标签色片（多选，语义色公式：100 底 700 字 / dark 900·40 300） */
+  .tag-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    min-height: 32px; padding: 5px 10px; border-radius: 9999px;
+    font-size: 12px; font-weight: 500; cursor: pointer; border: none; font-family: inherit;
+  }
+  .tag-chip .swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .tag-chip.off { background: var(--normal-bg); color: var(--normal-fg); }
+  .tag-chip.on-sky { background: var(--info-bg); color: var(--info-fg); }
+  .tag-chip.on-emerald { background: var(--success-bg); color: var(--success-fg); }
+  .tag-chip.on-amber { background: var(--soon-bg); color: var(--soon-fg); }
+  .tag-chip.on-red { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .tag-chip svg { flex: none; }
+
+  /* 象限双开关（复用 RecurrenceField 星期 chip 视觉） */
+  .quad-hint { font-size: 12px; color: var(--info-fg); background: var(--info-bg);
+    border-radius: 9999px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 6px; }
+
+  /* 关联区（子任务 / 附件 / 依赖）——仅编辑态出现 */
+  .rel-section { border-top: 1px solid var(--row-divider); padding-top: 16px; display: grid; gap: 12px; }
+  .rel-title { font-size: 12px; font-weight: 500; color: var(--label); margin: 0; }
+  .rel-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .rel-item { display: flex; align-items: center; gap: 8px; }
+  .cbx-sq { width: 16px; height: 16px; border-radius: 3px; border: 1.5px solid var(--circle-border);
+    background: var(--card-bg); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .cbx-sq.checked { background: #0ea5e9; border-color: #0ea5e9; }
+  .cbx-sq svg { color: #fff; display: none; } .cbx-sq.checked svg { display: block; }
+  .hit44 { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .rel-input { flex: 1; min-width: 0; background: transparent; }
+  .rel-title-text { flex: 1; min-width: 0; font-size: 14px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rel-title-text.done { color: var(--icon-muted); text-decoration: line-through; }
+  .move-col { display: flex; flex-direction: column; width: 44px; flex: none; }
+  .move-btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 2px 0;
+    border: none; background: transparent; color: var(--ghost-text); cursor: pointer; }
+  .move-btn.disabled { opacity: 0.4; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer; flex: none;
+  }
+  .icon-btn.danger.is-hover { color: var(--danger-fg); }
+  .grip { color: var(--icon-muted); display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
+  .rel-trigger-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .rel-open {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 8px 8px;
+    border: none; background: transparent; color: var(--label);
+    font-family: inherit; font-size: 14px; cursor: pointer; border-radius: 8px;
+  }
+  .search-results { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+  .result-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px;
+    padding: 8px; border: none; border-radius: 8px; background: transparent; color: var(--text-secondary);
+    font-family: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+  .result-btn.is-hover { background: var(--input-bg); color: var(--icon-hover); }
+  .result-more { font-size: 12px; color: var(--icon-muted); padding: 4px 8px; }
+
+  /* 保存栏 */
+  .save-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+    margin-top: 4px; }
+  .kbd-hint { font-size: 12px; color: var(--label); margin: 0; }
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
+    padding: 8px 16px; border: none; border-radius: 8px; background: #0ea5e9; color: #fff;
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+
+  /* 待办行（复刻 02 · TodoItem 展示态，用于编辑态容器内的兄弟行） */
+  .list { overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--row-divider); }
+  .row:last-child { border-bottom: none; }
+  .row.editing { display: block; }
+  .circle { width: 24px; height: 24px; flex: none; border-radius: 50%;
+    border: 1px solid var(--circle-border); background: var(--card-bg);
+    display: flex; align-items: center; justify-content: center; color: #fff; }
+  .circle.checked { background: #0ea5e9; border-color: #0ea5e9; }
+  .row-main { min-width: 0; flex: 1; }
+  .row-title { font-size: 16px; line-height: 1.4; color: #334155; }
+  .dark .row-title { color: #e2e8f0; }
+  .row-title.done { color: #94a3b8; text-decoration: line-through; }
+  .dark .row-title.done { color: #64748b; }
+  .badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500;
+    padding: 2px 6px; border-radius: 6px; }
+  .badge.tnum { font-variant-numeric: tabular-nums; }
+  .badge svg { flex: none; }
+  .badge.due-soon { background: var(--soon-bg); color: var(--soon-fg); }
+  .badge.due-normal { background: var(--normal-bg); color: var(--normal-fg); }
+  .badge.pill-slate { background: var(--normal-bg); color: var(--normal-fg); }
+  .row-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+  /* 状态板 */
+  .states { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 8px; }
+  .panel { padding: 24px; }
+  .panel-title { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .panel-note { font-size: 12px; color: var(--text-secondary); margin: 0 0 16px; }
+
+  /* 提示条（与 01 · 02 alert 同款；单通道 role=status） */
+  .alert { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 8px;
+    font-size: 14px; line-height: 1.5; }
+  .alert svg { flex: none; margin-top: 1px; }
+  .alert.error { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .alert.warn { background: var(--soon-bg); color: var(--soon-fg); }
+  .alert.success { background: var(--success-bg); color: var(--success-fg); }
+  .rank-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+  .rank-list li { font-size: 12px; color: var(--text-secondary); display: flex; gap: 8px; align-items: baseline; }
+  .rank-list .k { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+
+  .err-demo { display: grid; gap: 16px; }
+  .err-demo .field .ctrl { pointer-events: none; }
+  .foot-note { text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>统一创建与编辑界面</h1>
+      <p class="lead">统一字段块 · 创建表单与行内编辑两容器复用 · 全字段分组展开（内容 / 时间 / 归类 / 关联）· 校验与单通道提示 · 浅暗成对</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <div class="stage">
+
+    <!-- ===================== 容器一：统一创建表单 ===================== -->
+    <div class="section-title"><span class="idx">容器 A</span><h2>统一创建表单</h2></div>
+    <p class="container-note">首行标题 + 详情区。内容 / 时间 / 归类三组全字段展开；关联区（子任务 / 附件 / 依赖）属既有任务，仅编辑态出现（见容器 B）。字段块与编辑态逐字复用同一视觉。</p>
+
+    <form class="surface-card form-card" aria-label="新建任务">
+      <!-- 首行：标题（含码点计数器）+ 展开 slider + 添加 -->
+      <div class="title-row">
+        <div class="title-col">
+          <div class="label-line">
+            <label class="field-label" for="c-title">标题</label>
+            <span class="counter num" id="c-title-count">还可输入 12 字</span>
+          </div>
+          <div class="ctrl"><span class="val">整理季度计划并同步给团队</span></div>
+        </div>
+        <button type="button" class="icon-square is-hover" aria-label="收起更多选项" aria-expanded="true" aria-controls="c-details">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+        </button>
+        <button type="button" class="btn-add">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          添加
+        </button>
+      </div>
+
+      <!-- 详情区（展开）：内容 / 时间 / 归类 -->
+      <div class="details" id="c-details">
+
+        <!-- 内容组 -->
+        <fieldset class="group">
+          <legend class="legend">内容</legend>
+          <div class="grid2">
+            <div class="field col-full">
+              <div class="label-line">
+                <label class="field-label" for="c-notes">备注</label>
+                <span class="counter num">还可输入 198 字</span>
+              </div>
+              <div class="ctrl textarea"><span class="ph">补充说明、链接或上下文…</span></div>
+            </div>
+          </div>
+        </fieldset>
+
+        <!-- 时间组 -->
+        <fieldset class="group">
+          <legend class="legend">时间</legend>
+          <div class="grid2">
+            <div class="field">
+              <label class="field-label" for="c-due">截止日</label>
+              <div class="ctrl"><span class="val num">2026-07-30</span>
+                <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="c-est">估时（分钟）</label>
+              <div class="ctrl num" style="width:100%"><span class="val num">45</span></div>
+            </div>
+
+            <!-- 重复：渐进式频率子控件（此处呈每周变体） -->
+            <fieldset class="group col-full">
+              <div class="sub-legend">重复</div>
+              <div class="stack">
+                <div class="field">
+                  <label class="field-label" style="display:block;margin-bottom:4px">频率</label>
+                  <div class="ctrl"><span class="val">每周</span>
+                    <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label" style="display:block;margin-bottom:4px">重复间隔</label>
+                  <div class="inline-num">
+                    <span class="unit">每</span>
+                    <div class="ctrl num"><span class="val num">1</span></div>
+                    <span class="unit">周</span>
+                  </div>
+                </div>
+                <div class="field">
+                  <span class="field-label" style="display:block;margin-bottom:4px">重复的星期</span>
+                  <div class="chip-row" role="group" aria-label="重复的星期">
+                    <button type="button" class="chip on" aria-pressed="true" aria-label="周一">一</button>
+                    <button type="button" class="chip" aria-pressed="false" aria-label="周二">二</button>
+                    <button type="button" class="chip on" aria-pressed="true" aria-label="周三">三</button>
+                    <button type="button" class="chip" aria-pressed="false" aria-label="周四">四</button>
+                    <button type="button" class="chip on" aria-pressed="true" aria-label="周五">五</button>
+                    <button type="button" class="chip" aria-pressed="false" aria-label="周六">六</button>
+                    <button type="button" class="chip" aria-pressed="false" aria-label="周日">日</button>
+                  </div>
+                </div>
+                <fieldset class="group">
+                  <div class="sub-legend">结束</div>
+                  <div class="stack" style="gap:2px">
+                    <label class="opt-row"><input type="radio" name="c-end" checked /><span class="opt-lbl">永不结束</span></label>
+                    <label class="opt-row"><input type="radio" name="c-end" /><span class="opt-lbl">到某天停止</span></label>
+                    <label class="opt-row"><input type="radio" name="c-end" /><span class="opt-lbl">重复次数后停止</span></label>
+                  </div>
+                </fieldset>
+                <p class="hint-text">每周一、周三、周五重复。</p>
+                <p class="caption" style="margin:0">频率切换即渐进展开：每周→重复的星期；每月→月内位置（同一天/指定某日/最后一天）+ 按农历；每年→按农历；工作日/每日无附加子控件。</p>
+              </div>
+            </fieldset>
+
+            <!-- 提醒：多点列表 + 本地固定策略 -->
+            <fieldset class="group col-full">
+              <div class="sub-legend">提醒</div>
+              <div class="stack" style="gap:8px">
+                <div class="rem-row">
+                  <div class="ctrl"><span class="val num">2026-07-30 09:00</span>
+                    <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  </div>
+                  <button type="button" class="icon-btn" aria-label="删除提醒 2026-07-30 09:00">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                  </button>
+                </div>
+                <div class="rem-row">
+                  <div class="ctrl"><span class="val num">2026-07-29 18:00</span>
+                    <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  </div>
+                  <button type="button" class="icon-btn" aria-label="删除提醒 2026-07-29 18:00">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                  </button>
+                </div>
+                <button type="button" class="btn-ghost" style="width:fit-content;padding-left:8px;padding-right:8px;color:var(--label)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  添加提醒
+                </button>
+                <p class="caption" style="margin:0">每个提醒点记录设置时的本地时区偏移，供原生调度做「浮动 / 固定」（时区策略见 提醒通知/07·08）。</p>
+              </div>
+            </fieldset>
+
+            <div class="field">
+              <label class="field-label" for="c-start">开始日期</label>
+              <div class="ctrl"><span class="val num">2026-07-28</span>
+                <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+              </div>
+            </div>
+            <div class="field"><!-- 占位保持两列 --></div>
+
+            <!-- 时间段：开始时刻 / 结束时刻 -->
+            <fieldset class="group col-full">
+              <div class="sub-legend">时间段</div>
+              <div class="grid2">
+                <div class="field">
+                  <label class="field-label" style="display:block;margin-bottom:4px">开始时刻</label>
+                  <div class="ctrl"><span class="val num">2026-07-30 14:00</span>
+                    <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label" style="display:block;margin-bottom:4px">结束时刻</label>
+                  <div class="ctrl"><span class="val num">2026-07-30 15:30</span>
+                    <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  </div>
+                </div>
+              </div>
+            </fieldset>
+          </div>
+        </fieldset>
+
+        <!-- 归类组（标签 / 象限 / 清单）——契约已具 tag_ids / important / urgent / list_id，界面待接线，此处为复现参照 -->
+        <fieldset class="group">
+          <legend class="legend">归类</legend>
+          <div class="grid2">
+            <!-- 标签：多选色片（语义色公式着色） -->
+            <div class="field col-full">
+              <span class="field-label" style="display:block;margin-bottom:6px">标签</span>
+              <div class="chip-row" role="group" aria-label="标签">
+                <button type="button" class="tag-chip on-sky" aria-pressed="true">
+                  <span class="swatch" style="background:#0ea5e9"></span>工作
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+                <button type="button" class="tag-chip on-emerald" aria-pressed="true">
+                  <span class="swatch" style="background:#10b981"></span>重点
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+                <button type="button" class="tag-chip off" aria-pressed="false"><span class="swatch" style="background:#f59e0b"></span>学习</button>
+                <button type="button" class="tag-chip off" aria-pressed="false"><span class="swatch" style="background:#ef4444"></span>家庭</button>
+                <button type="button" class="tag-chip off" aria-pressed="false">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  新建标签
+                </button>
+              </div>
+              <p class="hint-text">已选 2 个；点击切换选中，选中态用该标签语义色（100 底 / 700 字）。</p>
+            </div>
+
+            <!-- 象限：重要 × 紧急（复用星期 chip 视觉；三态 未设/是/否） -->
+            <div class="field col-full">
+              <span class="field-label" style="display:block;margin-bottom:6px">象限（重要 × 紧急）</span>
+              <div class="chip-row" style="align-items:center">
+                <button type="button" class="chip on" aria-pressed="true" aria-label="标记为重要">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                  重要
+                </button>
+                <button type="button" class="chip on" aria-pressed="true" aria-label="标记为紧急">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                  紧急
+                </button>
+                <span class="quad-hint">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                  第一象限 · 重要且紧急，优先处理
+                </span>
+              </div>
+              <p class="hint-text">紧急默认按截止日临近度推断；显式点选后固定不被推断覆盖（三态：未设 / 是 / 否）。</p>
+            </div>
+
+            <!-- 清单：单选下拉 -->
+            <div class="field">
+              <label class="field-label" for="c-list" style="display:block;margin-bottom:4px">清单</label>
+              <div class="ctrl"><span class="val">工作</span>
+                <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+              <p class="hint-text">单清单模型：未选即收件箱；多维分类交给标签。</p>
+            </div>
+            <div class="field"></div>
+          </div>
+        </fieldset>
+      </div>
+    </form>
+
+    <!-- ===================== 容器二：TodoItem 行内编辑态 ===================== -->
+    <div class="section-title"><span class="idx">容器 B</span><h2>TodoItem 行内编辑态</h2></div>
+    <p class="container-note">列表中点击标题即在原位展开为表单：详情区默认展开，字段块（内容 / 时间 / 归类）与容器 A 逐字复用，此处以「时间」组为样并重点呈现仅编辑态出现的关联区（子任务 / 附件 / 依赖）与保存栏。</p>
+
+    <div class="surface-card list" style="margin-bottom:24px">
+      <!-- 两条折叠展示行（复刻 02 待办行） -->
+      <div class="row">
+        <span class="circle"></span>
+        <div class="row-main">
+          <div class="row-title">完成产品评审并同步团队</div>
+          <div class="badges">
+            <span class="badge due-soon">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              今天 · 已设提醒
+            </span>
+          </div>
+        </div>
+        <div class="row-actions">
+          <button class="icon-btn" aria-label="复制 完成产品评审并同步团队">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          </button>
+          <button class="icon-btn" aria-label="删除 完成产品评审并同步团队">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 展开为编辑态的行 -->
+      <div class="row editing">
+        <form aria-label="编辑 发布 v1 上线公告" style="display:grid;gap:12px">
+          <!-- 首行标题 + 收起 slider（编辑态无「添加」，详情始终展开） -->
+          <div class="title-row">
+            <div class="title-col">
+              <label class="field-label" for="e-title" style="display:block;margin-bottom:4px">标题</label>
+              <div class="ctrl is-focus"><span class="val">发布 v1 上线公告</span></div>
+            </div>
+            <button type="button" class="icon-square" aria-label="收起更多选项" aria-expanded="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+            </button>
+          </div>
+
+          <!-- 时间组（样例，示字段块复用；内容/归类同容器 A） -->
+          <fieldset class="group">
+            <legend class="legend">时间</legend>
+            <div class="grid2">
+              <div class="field">
+                <label class="field-label" style="display:block;margin-bottom:4px">截止日</label>
+                <div class="ctrl"><span class="val num">2026-08-05</span>
+                  <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                </div>
+              </div>
+              <div class="field">
+                <label class="field-label" style="display:block;margin-bottom:4px">开始日期</label>
+                <div class="ctrl"><span class="val num">2026-07-30</span>
+                  <svg class="adorn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                </div>
+              </div>
+              <p class="caption col-full" style="margin:0">内容（备注）、归类（标签 / 象限 / 清单）与容器 A 完全一致，此处从略。</p>
+            </div>
+          </fieldset>
+
+          <!-- 关联区：子任务 -->
+          <section class="rel-section" aria-label="子任务">
+            <p class="rel-title">子任务 <span class="num">1/3</span></p>
+            <ul class="rel-list">
+              <li class="rel-item">
+                <label class="hit44"><span class="cbx-sq checked"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span></label>
+                <div class="rel-input rel-title-text done">拟定发布说明初稿</div>
+                <div class="move-col">
+                  <button type="button" class="move-btn disabled" aria-label="上移子任务 拟定发布说明初稿"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button type="button" class="move-btn" aria-label="下移子任务 拟定发布说明初稿"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <button type="button" class="icon-btn" aria-label="删除子任务 拟定发布说明初稿"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button>
+                <span class="grip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg></span>
+              </li>
+              <li class="rel-item">
+                <label class="hit44"><span class="cbx-sq"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span></label>
+                <div class="rel-input rel-title-text">准备渠道分发物料</div>
+                <div class="move-col">
+                  <button type="button" class="move-btn" aria-label="上移子任务 准备渠道分发物料"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button type="button" class="move-btn" aria-label="下移子任务 准备渠道分发物料"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <button type="button" class="icon-btn" aria-label="删除子任务 准备渠道分发物料"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button>
+                <span class="grip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg></span>
+              </li>
+            </ul>
+            <div class="rem-row" style="gap:8px">
+              <div class="ctrl"><span class="ph">添加子任务…</span></div>
+              <button type="button" class="icon-btn" aria-label="添加子任务"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+            </div>
+          </section>
+
+          <!-- 关联区：附件（链接 + 文件两入口） -->
+          <section class="rel-section" aria-label="附件">
+            <p class="rel-title">附件 <span class="num">2</span></p>
+            <ul class="rel-list">
+              <li class="rel-item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--icon-muted);flex:none"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                <span class="rel-title-text">发布计划 · Notion 页面</span>
+                <button type="button" class="icon-btn" aria-label="移除链接 发布计划 · Notion 页面"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button>
+              </li>
+              <li class="rel-item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--icon-muted);flex:none"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                <span class="rel-title-text">v1-发布公告.docx</span>
+                <button type="button" class="icon-btn" aria-label="移除文件 v1-发布公告.docx"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button>
+              </li>
+            </ul>
+            <div class="rel-trigger-row">
+              <button type="button" class="rel-open"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>链接</button>
+              <button type="button" class="rel-open"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>文件</button>
+            </div>
+          </section>
+
+          <!-- 关联区：依赖（搜索选前置 + 锁定态） -->
+          <section class="rel-section" aria-label="前置任务">
+            <p class="rel-title">前置任务 <span class="num">1</span></p>
+            <ul class="rel-list">
+              <li class="rel-item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--icon-muted);flex:none"><circle cx="12" cy="12" r="10"/></svg>
+                <span class="rel-title-text">完成产品评审并同步团队</span>
+                <button type="button" class="icon-btn" aria-label="移除前置任务 完成产品评审并同步团队"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button>
+              </li>
+            </ul>
+            <div class="ctrl" style="margin-top:2px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--icon-muted);flex:none"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <span class="val">评审</span>
+            </div>
+            <ul class="search-results">
+              <li><button type="button" class="result-btn is-hover"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M5 12h14"/><path d="M12 5v14"/></svg><span class="val">评审设计走查清单</span></button></li>
+              <li><button type="button" class="result-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M5 12h14"/><path d="M12 5v14"/></svg><span class="val">评审预算表</span></button></li>
+            </ul>
+            <p class="caption" style="margin:2px 0 0">锁定语义：前置未完成时，本行以中性「待前置完成」徽标显示、解锁前不提醒（折叠行见下方保存栏上方示例）。已选、成环、自身在候选中预先剔除。</p>
+          </section>
+
+          <!-- 保存栏 -->
+          <div class="save-bar">
+            <p class="kbd-hint">Enter 保存 · Esc 取消</p>
+            <div style="display:flex;gap:8px">
+              <button type="button" class="btn-ghost">取消</button>
+              <button type="submit" class="btn-primary">保存</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- 锁定态折叠行（依赖未完成，中性徽标，解锁前不提醒） -->
+      <div class="row">
+        <span class="circle"></span>
+        <div class="row-main">
+          <div class="row-title">发布 v1 上线公告</div>
+          <div class="badges">
+            <span class="badge pill-slate tnum" title="依赖未完成：待“完成产品评审并同步团队”完成，解锁前不提醒">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              待前置完成
+            </span>
+            <span class="badge due-normal">8月5日 · 已设提醒</span>
+          </div>
+        </div>
+        <div class="row-actions">
+          <button class="icon-btn" aria-label="复制 发布 v1 上线公告">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          </button>
+          <button class="icon-btn" aria-label="删除 发布 v1 上线公告">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== 状态板：字段级校验 + 三类提示条优先级 ===================== -->
+    <div class="section-title"><span class="idx">状态</span><h2>校验错误态与提示条</h2></div>
+    <div class="states">
+      <!-- 字段级校验错误态 -->
+      <section class="surface-card panel">
+        <div class="panel-title">字段级校验错误态</div>
+        <div class="panel-note">失焦（blur）/ 提交时校验，非逐键；错误信息紧贴字段下方并说明修复方式，控件带 aria-invalid（填充式输入不改边框，靠红字 + 语义提示传达，与实现一致）。</div>
+        <div class="err-demo">
+          <div class="field">
+            <label class="field-label" style="display:block;margin-bottom:4px">标题</label>
+            <div class="ctrl" aria-invalid="true"><span class="ph">输入待办标题…</span></div>
+            <p class="err-text">标题不能为空，请输入内容。</p>
+          </div>
+          <div class="field">
+            <span class="field-label" style="display:block;margin-bottom:4px">时间段 · 结束时刻</span>
+            <div class="ctrl" aria-invalid="true"><span class="val num">2026-07-30 13:00</span></div>
+            <p class="err-text">结束时刻需要晚于开始时刻。</p>
+          </div>
+          <div class="field">
+            <label class="field-label" style="display:block;margin-bottom:4px">估时（分钟）</label>
+            <div class="ctrl num" style="width:120px" aria-invalid="true"><span class="val num">-5</span></div>
+            <p class="err-text">估时请填写大于 0 的整数分钟，或留空。</p>
+          </div>
+          <div class="field">
+            <label class="field-label" style="display:block;margin-bottom:4px">重复间隔</label>
+            <div class="inline-num">
+              <span class="unit">每</span>
+              <div class="ctrl num" aria-invalid="true"><span class="val num">0</span></div>
+              <span class="unit">周</span>
+            </div>
+            <p class="err-text">重复间隔请填写 1 到 999 之间的整数。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 三类提示条优先级 -->
+      <section class="surface-card panel">
+        <div class="panel-title">提示条（单通道 · 三类优先级）</div>
+        <div class="panel-note">全页共用一个 role=status 活动区，四来源（表单 / 存储 / 导出 / 提醒）竞争一行。三类语气均带图标与文字，色彩不孤用。</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="alert error" role="status">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>无法添加：这会让任务互相依赖（成环）。</span>
+          </div>
+          <div class="alert warn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>标题已达上限，最多 500 字；粘贴内容超出的部分未加入。</span>
+          </div>
+          <div class="alert success">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+            <span>“准备渠道分发物料”已移到第 2 项，共 3 项。</span>
+          </div>
+        </div>
+        <ul class="rank-list">
+          <li><span class="k">语气</span>error（red）＞ warn（amber）＞ success（emerald）</li>
+          <li><span class="k">存活</span>transient（下一次按键/关闭即清）＜ standing（条件消失才清）——排序先比存活再比语气</li>
+          <li><span class="k">来源</span>form ＜ storage ＜ export ＜ reminder（并列时的末位裁决）</li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="caption foot-note">跨端待办应用 · 统一创建与编辑界面 · 令牌唯一事实源 DESIGN.md · 字段块对齐 TodoFields / 子组件 · 浅色 / 暗色成对</div>
+
+  </div>
+</div>
+</body>
+</html>
