@@ -20,10 +20,11 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use chrono::Local;
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 use todo_domain::ics::instant_unix_seconds;
-use todo_domain::quiet::plan_quiet_delivery;
+use todo_domain::quiet::{local_minute_of_day, plan_quiet_delivery};
 use todo_domain::reminder::{due_reminders, DueReminder};
 use todo_domain::renag::{due_renags, renag_occurrence_unix, RenagDue};
 use todo_domain::summary::due_morning_summary;
@@ -47,14 +48,29 @@ const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// required to carry.
 const OVERDUE_GRACE_SECONDS: i64 = 60;
 
-/// Where the device sits, in seconds east of UTC, for the reads that are a local
-/// question — the overdue anchor (提醒通知/04) and the quiet window (提醒通知/05).
+/// The device's current offset from UTC, in seconds east — the local reads the
+/// scheduler makes each poll (the overdue anchor 提醒通知/04, the quiet window and
+/// its held-batch classification 提醒通知/05, and the morning summary's local day
+/// and time 提醒通知/06) all weigh a wall-clock boundary, so they need to know
+/// where the device sits (提醒通知/07).
 ///
-/// Zero for now: both read their boundary in UTC, which is exact for UTC and late
-/// — never early — for the primary east-of-UTC market. 提醒通知/07 feeds the
-/// device's real offset through `reminder_prefs` and this constant becomes that
-/// read, with no change to either rule.
-const ZONE_OFFSET_SECONDS: i64 = 0;
+/// Read fresh every poll, and from the OS rather than a preference the webview
+/// wrote: the app can sit in the tray with no webview running while the machine
+/// travels across a zone or crosses a daylight-saving boundary, so any cached
+/// offset would go stale and fire a reminder at the wrong wall-clock time. The
+/// domain rules already take a `zone_offset_seconds`; this is the seam that was a
+/// fixed `0` until now, so those rules are unchanged — they are simply handed the
+/// real offset.
+///
+/// `chrono::Local` re-reads the OS zone on each call, so the value is the one in
+/// effect at this instant. A platform that cannot resolve its zone falls back to
+/// UTC inside chrono, which reads late — never early — for the primary
+/// east-of-UTC market, the same tolerance the fixed `0` had before it. The sign
+/// matches the domain's convention directly (`local_minus_utc` is seconds east of
+/// UTC, e.g. +28800 for UTC+8), so it is fed through with no adjustment.
+fn current_zone_offset_seconds() -> i64 {
+    i64::from(Local::now().offset().local_minus_utc())
+}
 
 /// Starts the background scheduler.
 ///
@@ -88,7 +104,7 @@ pub fn spawn(app: &tauri::AppHandle) {
 fn run(app: tauri::AppHandle) {
     loop {
         std::thread::sleep(POLL_INTERVAL);
-        poll_once(&app, now_unix_seconds());
+        poll_once(&app, now_unix_seconds(), current_zone_offset_seconds());
     }
 }
 
@@ -103,7 +119,7 @@ fn run(app: tauri::AppHandle) {
 /// plan (提醒通知/05): inside the window nothing goes out, the night's held-back
 /// reminders are folded into one summary when the window ends, and with quiet
 /// hours off the plan is a plain "one toast each" — today's behaviour untouched.
-fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
+fn poll_once(app: &tauri::AppHandle, now_unix: i64, zone_offset_seconds: i64) {
     let db = app.state::<TodoDb>();
 
     let todos = match db.list() {
@@ -130,7 +146,7 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
             .collect();
     if reminder_prefs::renag_overdue_enabled(app) {
         items.extend(
-            due_renags(&todos, &delivered, now_unix, ZONE_OFFSET_SECONDS)
+            due_renags(&todos, &delivered, now_unix, zone_offset_seconds)
                 .into_iter()
                 .map(DueItem::Renag),
         );
@@ -146,13 +162,25 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
         None
     };
     let instants: Vec<i64> = items.iter().map(|item| item.instant_unix(now_unix)).collect();
-    let plan = plan_quiet_delivery(&instants, window, now_unix, ZONE_OFFSET_SECONDS);
+    let plan = plan_quiet_delivery(&instants, window, now_unix, zone_offset_seconds);
 
     // One toast each for the ordinary deliveries — reminders on time or overdue,
     // renags, and any lone reminder flushed after the window.
+    //
+    // A reminder whose own moment fell inside a quiet window was held on purpose,
+    // so when it is flushed after the window it is a 补推, not a miss: it carries
+    // no `【逾期】` mark, the same as the summary path already drops it for a
+    // held batch of two or more (提醒通知/05, 提醒通知/07 §5). The check reads the
+    // moment against the window through the very functions the plan classified it
+    // with, so the lone-flushed reminder and the summarised batch agree on what
+    // counts as "held". A fresh daytime reminder the app missed while it was
+    // closed is not in the window and keeps its overdue mark.
     for &index in &plan.deliver {
         let item = &items[index];
-        let (title, body) = item.notification_text();
+        let quiet_flushed = window.is_some_and(|quiet| {
+            quiet.contains(local_minute_of_day(instants[index], zone_offset_seconds))
+        });
+        let (title, body) = item.notification_text(quiet_flushed);
         show(app, &title, &body, item.todo_id());
         record(&db, item);
     }
@@ -179,7 +207,7 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
         &delivered,
         &reminder_prefs::morning_summary_prefs(app),
         now_unix,
-        ZONE_OFFSET_SECONDS,
+        zone_offset_seconds,
     ) {
         // Ride the same quiet gate the reminders do, but on its own one-item plan:
         // inside the window nothing goes out and nothing is recorded (a later poll
@@ -188,7 +216,7 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
         // A one-item plan can never summarise, so the morning summary is never
         // folded into the quiet-hours re-push — the two stay two notifications
         // (提醒通知/06 §4).
-        let plan = plan_quiet_delivery(&[summary.scheduled_unix], window, now_unix, ZONE_OFFSET_SECONDS);
+        let plan = plan_quiet_delivery(&[summary.scheduled_unix], window, now_unix, zone_offset_seconds);
         if !plan.deliver.is_empty() {
             show(app, &summary.title, &summary.body, "morning summary");
             if let Err(error) =
@@ -235,9 +263,14 @@ impl DueItem {
     }
 
     /// The item's own notification text — the deadline reminder's, or the renag's.
-    fn notification_text(&self) -> (String, String) {
+    ///
+    /// `quiet_flushed` is whether the item's own moment fell inside a quiet window,
+    /// so a reminder held there and flushed after it drops its `【逾期】` mark. It
+    /// is meaningful only for a reminder: a renag's wording ("逾期未完成 · …") is
+    /// its own kind of notification, not the late-catch-up mark, so it is unchanged.
+    fn notification_text(&self, quiet_flushed: bool) -> (String, String) {
         match self {
-            DueItem::Reminder(reminder) => notification_text(reminder),
+            DueItem::Reminder(reminder) => notification_text(reminder, quiet_flushed),
             DueItem::Renag(renag) => renag_notification_text(renag),
         }
     }
@@ -273,8 +306,15 @@ fn record(db: &TodoDb, item: &DueItem) {
 /// missed while the app was closed from one that has only just come due; the body
 /// names the due date when there is one, matching the running app's wording so the
 /// two are not two different notifications for the one task.
-fn notification_text(reminder: &DueReminder) -> (String, String) {
-    let title = if reminder.overdue {
+///
+/// The mark is dropped when `quiet_flushed` — the reminder's own moment fell in a
+/// quiet window, so its late delivery is a deliberate 补推 rather than a miss, and
+/// marking it 逾期 would misread the user's own quiet hours as the app running
+/// behind (提醒通知/07 §5). This is the same reasoning the summary path applies to
+/// a held batch of two or more; doing it here for the lone flushed reminder keeps
+/// the two补推 paths consistent.
+fn notification_text(reminder: &DueReminder, quiet_flushed: bool) -> (String, String) {
+    let title = if reminder.overdue && !quiet_flushed {
         format!("【逾期】{}", reminder.title)
     } else {
         reminder.title.clone()
@@ -342,8 +382,9 @@ mod tests {
     #[test]
     fn an_overdue_reminder_is_marked_in_its_title() {
         // The restart catch-up requirement: a re-raised reminder has to say it is
-        // late so the user can tell it apart from one that just came due.
-        let (title, body) = notification_text(&reminder(true, Some("2026-07-24")));
+        // late so the user can tell it apart from one that just came due. Not a
+        // quiet-hours flush, so the mark stays.
+        let (title, body) = notification_text(&reminder(true, Some("2026-07-24")), false);
         assert!(title.contains("逾期"), "an overdue reminder must say so: {title}");
         assert!(title.contains("买牛奶"));
         assert_eq!(body, "截止日：2026-07-24");
@@ -351,10 +392,25 @@ mod tests {
 
     #[test]
     fn an_on_time_reminder_is_just_the_task() {
-        let (title, body) = notification_text(&reminder(false, None));
+        let (title, body) = notification_text(&reminder(false, None), false);
         assert_eq!(title, "买牛奶");
         assert!(!title.contains("逾期"));
         assert_eq!(body, "提醒时间到了");
+    }
+
+    #[test]
+    fn a_reminder_flushed_after_the_quiet_window_drops_its_overdue_mark() {
+        // 提醒通知/07 §5: a reminder whose own moment fell inside the quiet window
+        // was held on purpose, so the lone-flush path drops `【逾期】` just as the
+        // summary path drops it for a held batch — the user's quiet hours are not
+        // the app running late. The body is unchanged; only the mark goes.
+        let (title, body) = notification_text(&reminder(true, Some("2026-07-24")), true);
+        assert_eq!(title, "买牛奶", "a quiet-hours flush is a 补推, not a miss: {title}");
+        assert!(!title.contains("逾期"));
+        assert_eq!(body, "截止日：2026-07-24");
+        // An on-time reminder never had the mark, so `quiet_flushed` changes nothing.
+        let (on_time, _) = notification_text(&reminder(false, None), true);
+        assert_eq!(on_time, "买牛奶");
     }
 
     #[test]

@@ -499,6 +499,34 @@ mod tests {
     }
 
     #[test]
+    fn the_local_day_and_push_time_read_through_the_zone_offset() {
+        // 提醒通知/07 feeds the device's real offset here; the summary weighs a
+        // wall-clock day and time, so a non-zero offset moves both. East of UTC the
+        // same instant is later in the local day, so a summary can be due there
+        // while it is still the small hours in UTC.
+        const EAST: i64 = 8 * 3_600; // UTC+8
+        let todos = vec![due("a", "2026-07-24")];
+
+        // 01:30 UTC is 09:30 in UTC+8 — past a 09:00 push — but only 01:30 in UTC.
+        let east = due_morning_summary(&todos, &no_deliveries(), &on("09:00"), at(1, 30), EAST)
+            .expect("the summary is due at 09:30 local for an east-of-UTC device");
+        assert_eq!(east.reminder_at, "summary:2026-07-24");
+        assert_eq!(east.body, "今日到期 1 条。");
+        // The same instant on a UTC device: it is 01:30, the push time has not come.
+        assert!(
+            due_morning_summary(&todos, &no_deliveries(), &on("09:00"), at(1, 30), UTC).is_none(),
+            "at 01:30 UTC the 09:00 summary has not fired"
+        );
+
+        // The count's local day follows the offset too: at 23:00 UTC the eastern
+        // device has already turned to the 25th, so a task due on the 25th is "due
+        // today" there while it is still the 24th — and the task future — in UTC.
+        let tomorrow = vec![due("b", "2026-07-25")];
+        assert_eq!(summary_counts(&tomorrow, at(23, 0), EAST).due_today, 1);
+        assert_eq!(summary_counts(&tomorrow, at(23, 0), UTC).due_today, 0);
+    }
+
+    #[test]
     fn the_my_day_segment_joins_the_body_once_its_source_lands() {
         // The seam 视图与统计/06 fills: a Some my-day count adds the third segment,
         // with no other change to the body's shape.
