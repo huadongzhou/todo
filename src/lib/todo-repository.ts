@@ -1,7 +1,8 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { currentZoneOffsetSeconds } from "@/lib/datetime";
 import { nativeCommands } from "@/lib/native";
 import { writeDiagnostic } from "@/lib/diagnostics";
-import type { Attachment, RecurrenceRule, Subtask, Todo } from "@/types/todo";
+import type { Attachment, RecurrenceRule, Reminder, Subtask, Todo } from "@/types/todo";
 
 /**
  * Where a write ended up.
@@ -176,6 +177,21 @@ function isSubtask(value: unknown): boolean {
   );
 }
 
+/**
+ * Field-for-field mirror of the `Reminder` contract, checked strictly like the
+ * other nested types: a reminder point is `{ at, offset }`, both required, so an
+ * entry missing either was not written by this app. The single `reminderAt` a task
+ * used to carry is folded into this list before it ever reaches storage (the SQLite
+ * migration on the native side, `fromLegacy` here for the browser fallback), so no
+ * stored entry carries the old key by the time this runs.
+ */
+function isReminder(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const fields: Record<keyof Reminder, true> = { at: true, offset: true };
+  if (Object.keys(value).some((key) => !(key in fields))) return false;
+  return typeof value.at === "string" && typeof value.offset === "number";
+}
+
 /** Field-for-field mirror of the `Attachment` contract. */
 function isAttachment(value: unknown): boolean {
   if (!isRecord(value)) return false;
@@ -248,7 +264,10 @@ const TODO_FIELDS = {
   },
   archivedAt: { accepts: isOptionalString },
   dueDate: { accepts: isOptionalString },
-  reminderAt: { accepts: isOptionalString },
+  reminders: {
+    accepts: (value: unknown) => isArrayOf(value, isReminder),
+    fallback: (): Reminder[] => [],
+  },
   notes: { accepts: isOptionalString },
   startDate: { accepts: isOptionalString },
   startsAt: { accepts: isOptionalString },
@@ -273,6 +292,25 @@ const TODO_FIELDS = {
 } satisfies Record<keyof Todo, TodoFieldRule>;
 
 /**
+ * Folds a stored entry's legacy single `reminderAt` into the `reminders` list, so
+ * a todo the browser fallback wrote before multi-level reminders reads back with
+ * its reminder kept rather than as an entry carrying a key this build has no place
+ * for. Mirrors the native SQLite migration: the instant is kept verbatim and
+ * tagged with the current device offset, whose original was never stored. An entry
+ * already carrying `reminders` only sheds the stale key.
+ */
+function foldLegacyReminder(value: Record<string, unknown>): Record<string, unknown> {
+  if (!("reminderAt" in value)) return value;
+  const { reminderAt, ...rest } = value;
+  if ("reminders" in rest) return rest;
+  const reminders: Reminder[] =
+    typeof reminderAt === "string" && reminderAt
+      ? [{ at: reminderAt, offset: currentZoneOffsetSeconds() }]
+      : [];
+  return { ...rest, reminders };
+}
+
+/**
  * Reads a stored entry back as a todo, filling in the fields it predates.
  *
  * Returning a todo (rather than a boolean) is what makes the field extension
@@ -282,13 +320,16 @@ const TODO_FIELDS = {
  */
 function readTodo(value: unknown): Todo | null {
   if (!isRecord(value)) return null;
-  if (Object.keys(value).some((key) => !(key in TODO_FIELDS))) return null;
+  // Fold the legacy single reminder before the key check, so an old entry reads
+  // as a migrated todo rather than one carrying a field this build cannot place.
+  const entry = foldLegacyReminder(value);
+  if (Object.keys(entry).some((key) => !(key in TODO_FIELDS))) return null;
 
   const rules: Record<string, TodoFieldRule> = TODO_FIELDS;
-  const normalised: Record<string, unknown> = { ...value };
+  const normalised: Record<string, unknown> = { ...entry };
   for (const [key, rule] of Object.entries(rules)) {
-    if (key in value) {
-      if (!rule.accepts(value[key])) return null;
+    if (key in entry) {
+      if (!rule.accepts(entry[key])) return null;
       continue;
     }
     if (rule.required) return null;

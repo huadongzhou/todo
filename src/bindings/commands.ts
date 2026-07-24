@@ -286,6 +286,39 @@ export type RejectedWrite = {
 	permanent: boolean,
 };
 
+/**
+ *  One reminder point on a task.
+ * 
+ *  A task may carry several (提醒通知/08), each firing at its own moment. The pair
+ *  of fields is what lets the global "fixed time" switch (提醒通知/07) read one
+ *  stored value two ways without a second copy of it: `at` is the absolute
+ *  instant, `offset` is where the device sat when the reminder was set, and the
+ *  wall-clock time the user chose is the two together. With the switch off (the
+ *  default) a reminder floats — it keeps that wall clock as the device travels;
+ *  with it on a reminder fires at `at` exactly. A relative "N before the due
+ *  date" reminder is a later, separate shape (登记为未来便利层) that would need a
+ *  payload-carrying variant; the absolute point here does not, so the reminder
+ *  list stays a plain struct with no `#[serde(flatten)]` or enum payload.
+ */
+export type Reminder = {
+	/**
+	 *  The instant the reminder is set for, as an ISO 8601 UTC instant — the same
+	 *  value the single `reminder_at` used to carry, kept verbatim through the
+	 *  migration so a migrated reminder keeps the delivery key it rode on.
+	 */
+	at: string,
+	/**
+	 *  The device's offset from UTC in seconds east when the reminder was set.
+	 * 
+	 *  Kept so the wall clock behind `at` can be recovered: the wall clock is `at`
+	 *  read at this offset. Floating delivery fires at that wall clock under the
+	 *  device's *current* offset; fixed-time delivery ignores it and fires at
+	 *  `at`. Within the ±14h a real zone can sit from UTC it fits an `i32` with
+	 *  room to spare.
+	 */
+	offset: number,
+};
+
 export type RuntimeInfo = {
 	platform: string,
 	appVersion: string,
@@ -341,7 +374,17 @@ export type Todo_Deserialize = {
 	 */
 	archivedAt?: string | null,
 	dueDate?: string | null,
-	reminderAt?: string | null,
+	/**
+	 *  Reminder points on the task, each firing at its own moment (提醒通知/08).
+	 * 
+	 *  Replaces the single `reminder_at` a task carried before multi-level
+	 *  reminders: a lone reminder becomes one entry here with its instant
+	 *  unchanged, so the delivery key that instant rode on is unchanged too, and
+	 *  the store's column migration folds an old single value in on read. Defaults
+	 *  empty like the other list-valued fields, so a payload from a build that
+	 *  never knew the field reads back with no reminders.
+	 */
+	reminders?: Reminder[],
 	/**  Free-text description, searchable alongside the title. */
 	notes?: string | null,
 	/**
@@ -422,7 +465,17 @@ export type Todo_Serialize = {
 	 */
 	archivedAt?: string | null,
 	dueDate?: string | null,
-	reminderAt?: string | null,
+	/**
+	 *  Reminder points on the task, each firing at its own moment (提醒通知/08).
+	 * 
+	 *  Replaces the single `reminder_at` a task carried before multi-level
+	 *  reminders: a lone reminder becomes one entry here with its instant
+	 *  unchanged, so the delivery key that instant rode on is unchanged too, and
+	 *  the store's column migration folds an old single value in on read. Defaults
+	 *  empty like the other list-valued fields, so a payload from a build that
+	 *  never knew the field reads back with no reminders.
+	 */
+	reminders: Reminder[],
 	/**  Free-text description, searchable alongside the title. */
 	notes?: string | null,
 	/**

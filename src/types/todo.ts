@@ -1,5 +1,6 @@
 export type { Todo } from "@/bindings/models/Todo";
 export type { TodoStatus } from "@/bindings/models/TodoStatus";
+export type { Reminder } from "@/bindings/models/Reminder";
 export type { Subtask } from "@/bindings/models/Subtask";
 export type { Attachment } from "@/bindings/models/Attachment";
 export type { AttachmentKind } from "@/bindings/models/AttachmentKind";

@@ -10,7 +10,6 @@ export interface Reminder {
   readonly id: string;
   readonly title: string;
   readonly dueDate?: string | null;
-  readonly reminderAt?: string | null;
 }
 
 let permissionState: "unknown" | "granted" | "denied" = "unknown";

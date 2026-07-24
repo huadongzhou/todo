@@ -2,7 +2,7 @@
 import { toInstant, toLocalDateTimeInput } from "@/lib/datetime";
 import { MAX_NOTES_CHARS } from "@/lib/native";
 import { normalizeNotes, normalizeTitle } from "@/lib/todo-normalize";
-import type { RecurrenceRule, Todo, Weekday } from "@/types/todo";
+import type { Reminder, RecurrenceRule, Todo, Weekday } from "@/types/todo";
 
 /**
  * What a create form or an inline editor is holding while the user fills it in.
@@ -21,7 +21,7 @@ export interface TodoDraft {
   title: string;
   notes: string | null;
   dueDate: string | null;
-  reminderAt: string | null;
+  reminders: Reminder[];
   startDate: string | null;
   startsAt: string | null;
   endsAt: string | null;
@@ -35,7 +35,7 @@ export function createEmptyDraft(): TodoDraft {
     title: "",
     notes: null,
     dueDate: null,
-    reminderAt: null,
+    reminders: [],
     startDate: null,
     startsAt: null,
     endsAt: null,
@@ -50,7 +50,7 @@ export function draftFromTodo(todo: Todo): TodoDraft {
     title: todo.title,
     notes: todo.notes ?? null,
     dueDate: todo.dueDate ?? null,
-    reminderAt: todo.reminderAt ?? null,
+    reminders: todo.reminders ?? [],
     startDate: todo.startDate ?? null,
     startsAt: todo.startsAt ?? null,
     endsAt: todo.endsAt ?? null,
@@ -64,15 +64,26 @@ export function draftFromTodo(todo: Todo): TodoDraft {
  * "did the user change anything" keeps working when a field is added, instead of
  * quietly comparing everything but the new one.
  *
- * Every key but `recurrence` holds a scalar, so `===` is the whole comparison;
- * `recurrence` holds an object, which `===` compares by identity, so a draft
- * opened on a recurring todo would read as "changed" the instant it was compared
- * to itself — turning every save of such a todo into an empty write and an undo
- * that undoes nothing. It alone is compared by structure.
+ * Every key but `recurrence` and `reminders` holds a scalar, so `===` is the
+ * whole comparison; those two hold an object and an array, which `===` compares
+ * by identity, so a draft opened on a recurring or reminded todo would read as
+ * "changed" the instant it was compared to itself — turning every save of such a
+ * todo into an empty write and an undo that undoes nothing. They alone are
+ * compared by structure.
  */
 export function isSameDraft(a: TodoDraft, b: TodoDraft): boolean {
-  return (Object.keys(a) as Array<keyof TodoDraft>).every((key) =>
-    key === "recurrence" ? sameRecurrence(a.recurrence, b.recurrence) : a[key] === b[key],
+  return (Object.keys(a) as Array<keyof TodoDraft>).every((key) => {
+    if (key === "recurrence") return sameRecurrence(a.recurrence, b.recurrence);
+    if (key === "reminders") return sameReminders(a.reminders, b.reminders);
+    return a[key] === b[key];
+  });
+}
+
+/** Whether two reminder lists carry the same points, in the same order. */
+function sameReminders(a: readonly Reminder[], b: readonly Reminder[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((point, index) => point.at === b[index].at && point.offset === b[index].offset)
   );
 }
 
@@ -123,9 +134,15 @@ export function normalizeDraft(draft: TodoDraft): TodoDraft {
  * one changes the answer without changing the question.
  */
 export function draftHasDetails(draft: TodoDraft): boolean {
-  return (Object.keys(draft) as Array<keyof TodoDraft>).some(
-    (key) => key !== "title" && draft[key] !== null && draft[key] !== "",
-  );
+  return (Object.keys(draft) as Array<keyof TodoDraft>).some((key) => {
+    if (key === "title") return false;
+    // An empty reminder list is "nothing set", the same as a null scalar — without
+    // this the details region would auto-open for every task, since `[]` is
+    // neither null nor "".
+    if (key === "reminders") return draft.reminders.length > 0;
+    const value = draft[key];
+    return value !== null && value !== "";
+  });
 }
 
 /**
@@ -204,7 +221,10 @@ type FieldControl =
   // A whole object, not a string, and edited by its own sub-component: it does not
   // go through a `codec` (which is string-in, string-out) but reads and writes
   // `draft.recurrence` directly. One more control shape, one more template branch.
-  | { readonly kind: "recurrence" };
+  | { readonly kind: "recurrence" }
+  // A whole list of reminder points, edited by its own sub-component the same way
+  // recurrence is — reads and writes `draft.reminders` directly, no `codec`.
+  | { readonly kind: "reminders" };
 
 /**
  * A length limit and when to start warning about it.
@@ -349,23 +369,16 @@ const FIELDS: readonly FieldDefinition[] = [
     error: recurrenceError,
   },
   {
-    key: "reminderAt",
-    label: "提醒时间",
+    // A whole list of reminder points, edited by its own sub-component like
+    // recurrence — a `{ kind: "reminders" }` control, not a string `codec`, and a
+    // full row because it grows with its content. Placed after the repeat rule,
+    // where the single 提醒时间 field used to sit; the "已过" hint and the past
+    // check live per row inside the sub-component now, not as a field-level note.
+    key: "reminders",
+    label: "提醒",
     group: "time",
-    span: "half",
-    control: {
-      kind: "input",
-      type: "datetime-local",
-      codec: codec("reminderAt", toLocalDateTimeInput, toInstant),
-    },
-    // A reminder in the past is a legitimate intent — it fires once, at once —
-    // so this only says so; it never blocks the submit.
-    note: (draft) => {
-      const instant = draft.reminderAt;
-      if (!instant) return null;
-      const at = new Date(instant).getTime();
-      return !Number.isNaN(at) && at < Date.now() ? "提醒时间已过，保存后会立即提醒一次。" : null;
-    },
+    span: "full",
+    control: { kind: "reminders" },
   },
   {
     key: "startDate",
@@ -433,6 +446,7 @@ function keysOf(field: FieldDefinition): FieldKey[] {
   const control = field.control;
   if (control.kind === "range") return control.parts.map((part) => part.codec.key);
   if (control.kind === "recurrence") return ["recurrence"];
+  if (control.kind === "reminders") return ["reminders"];
   return [control.codec.key];
 }
 
@@ -445,6 +459,7 @@ function fieldId(prefix: string, key: string): string {
 <script setup lang="ts">
 import { computed, nextTick, ref, toRaw, watch } from "vue";
 import RecurrenceField from "@/components/RecurrenceField.vue";
+import ReminderField from "@/components/ReminderField.vue";
 import { announceFormAlert, clearFormAlert, retractFormAlert } from "@/lib/form-alert";
 import { MAX_TITLE_CHARS } from "@/lib/native";
 import type { PageAlert } from "@/lib/page-alert";
@@ -712,6 +727,17 @@ function onRecurrenceChange(rule: RecurrenceRule | null): void {
 }
 
 /**
+ * Writes the whole reminder list, the array the reminder sub-component hands back.
+ * Built from `pendingDraft` like every other write, so a list changed in the same
+ * tick as another field is not built on the value from before it — the twin of
+ * `onRecurrenceChange`.
+ */
+function onReminders(list: Reminder[]): void {
+  commitDraft({ ...pendingDraft, reminders: list });
+  clearRejectionIfTouched();
+}
+
+/**
  * Validates on blur, but only once the field has held something: the create form
  * opens empty and blurring it is not a mistake. Nothing is announced here — the
  * user is moving focus, and a screen reader is already busy reading wherever
@@ -838,10 +864,13 @@ const visibleGroups = computed(() =>
       const error = field.error?.(draft.value) ?? null;
       const noteId = note ? `${id}-note` : null;
       const errorId = error ? `${id}-error` : null;
-      // A range has two codecs and recurrence has none — neither reads as a
-      // single string — so both take the `null` path and the branch that draws them.
+      // A range has two codecs, and recurrence and reminders have none — none of
+      // them reads as a single string — so they take the `null` path and the
+      // branch that draws them.
       const single =
-        control.kind === "range" || control.kind === "recurrence" ? null : control.codec;
+        control.kind === "range" || control.kind === "recurrence" || control.kind === "reminders"
+          ? null
+          : control.codec;
       const value = single ? single.read(draft.value) : "";
       const counter = field.maxChars ? counterFor(value, field.maxChars) : null;
       const counterId = counter ? `${id}-count` : null;
@@ -984,6 +1013,18 @@ defineExpose({ validate, focusTitle });
                 :error-id="entry.errorId"
                 :register-control="registerControl"
                 @update:model-value="onRecurrenceChange"
+              />
+              <!--
+                Reminders are a whole list edited by its own sub-component, the
+                twin of recurrence: the block hands over the value and the id and
+                reads a new list back through the same commit path. No error id or
+                control registry — the field has no blocking validation.
+              -->
+              <ReminderField
+                v-else-if="entry.kind === 'reminders'"
+                :model-value="draft.reminders"
+                :field-id="entry.id"
+                @update:model-value="onReminders"
               />
               <template v-else>
                 <div class="mb-1 flex items-baseline justify-between gap-2">

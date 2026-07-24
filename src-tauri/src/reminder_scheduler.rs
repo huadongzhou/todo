@@ -138,12 +138,24 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64, zone_offset_seconds: i64) {
     };
 
     // The due batch: reminders always; overdue renags only when the switch is on,
-    // read fresh each poll so turning it off stops the next tick from nagging.
-    let mut items: Vec<DueItem> =
-        due_reminders(&todos, &delivered, now_unix, OVERDUE_GRACE_SECONDS)
-            .into_iter()
-            .map(DueItem::Reminder)
-            .collect();
+    // read fresh each poll so turning it off stops the next tick from nagging. The
+    // reminders pass reads the device's current offset and the global "fixed time"
+    // switch (提醒通知/07/08): with the switch off (the default) a reminder floats to
+    // the device's wall clock, with it on it fires at its stored instant. Both are
+    // read fresh each poll, so travelling zones or flipping the switch takes effect
+    // on the next tick with no cache to keep in step.
+    let reminder_absolute = reminder_prefs::reminder_absolute_time_enabled(app);
+    let mut items: Vec<DueItem> = due_reminders(
+        &todos,
+        &delivered,
+        now_unix,
+        OVERDUE_GRACE_SECONDS,
+        zone_offset_seconds,
+        reminder_absolute,
+    )
+    .into_iter()
+    .map(DueItem::Reminder)
+    .collect();
     if reminder_prefs::renag_overdue_enabled(app) {
         items.extend(
             due_renags(&todos, &delivered, now_unix, zone_offset_seconds)

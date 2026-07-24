@@ -71,6 +71,19 @@ pub fn renag_overdue_enabled(app: &tauri::AppHandle) -> bool {
     read_bool(app, "reminder.renag", false)
 }
 
+/// Whether reminders fire at their fixed absolute instant rather than floating to
+/// the device's wall clock (提醒通知/07/08).
+///
+/// Off by default, matching the view layer's `reminder.tz.absolute` default: a
+/// reminder set to "9:00" is meant to stay 9:00 wherever the user is, so it floats
+/// unless the user asks for a fixed moment. When it is off the scheduler reads a
+/// reminder's stored offset to keep its wall clock as the device travels; when it
+/// is on the offset is ignored and the stored instant fires as-is. The key is the
+/// one `useSettingsStore` writes.
+pub fn reminder_absolute_time_enabled(app: &tauri::AppHandle) -> bool {
+    read_bool(app, "reminder.tz.absolute", false)
+}
+
 /// Whether the do-not-disturb window is on (提醒通知/05).
 ///
 /// Off by default, matching the view layer's `reminder.quiet.enabled` default:

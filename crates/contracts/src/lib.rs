@@ -55,9 +55,16 @@ pub struct Todo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub due_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub reminder_at: Option<String>,
+    /// Reminder points on the task, each firing at its own moment (提醒通知/08).
+    ///
+    /// Replaces the single `reminder_at` a task carried before multi-level
+    /// reminders: a lone reminder becomes one entry here with its instant
+    /// unchanged, so the delivery key that instant rode on is unchanged too, and
+    /// the store's column migration folds an old single value in on read. Defaults
+    /// empty like the other list-valued fields, so a payload from a build that
+    /// never knew the field reads back with no reminders.
+    #[serde(default)]
+    pub reminders: Vec<Reminder>,
     /// Free-text description, searchable alongside the title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
@@ -153,6 +160,7 @@ impl Todo {
             validate_id(list_id)?;
         }
 
+        validate_reminders(&self.reminders)?;
         validate_id_list(&self.tag_ids)?;
         validate_subtasks(&self.subtasks)?;
         validate_attachments(&self.attachments)?;
@@ -176,6 +184,36 @@ impl Todo {
 pub enum TodoStatus {
     Open,
     Completed,
+}
+
+/// One reminder point on a task.
+///
+/// A task may carry several (提醒通知/08), each firing at its own moment. The pair
+/// of fields is what lets the global "fixed time" switch (提醒通知/07) read one
+/// stored value two ways without a second copy of it: `at` is the absolute
+/// instant, `offset` is where the device sat when the reminder was set, and the
+/// wall-clock time the user chose is the two together. With the switch off (the
+/// default) a reminder floats — it keeps that wall clock as the device travels;
+/// with it on a reminder fires at `at` exactly. A relative "N before the due
+/// date" reminder is a later, separate shape (登记为未来便利层) that would need a
+/// payload-carrying variant; the absolute point here does not, so the reminder
+/// list stays a plain struct with no `#[serde(flatten)]` or enum payload.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase")]
+pub struct Reminder {
+    /// The instant the reminder is set for, as an ISO 8601 UTC instant — the same
+    /// value the single `reminder_at` used to carry, kept verbatim through the
+    /// migration so a migrated reminder keeps the delivery key it rode on.
+    pub at: String,
+    /// The device's offset from UTC in seconds east when the reminder was set.
+    ///
+    /// Kept so the wall clock behind `at` can be recovered: the wall clock is `at`
+    /// read at this offset. Floating delivery fires at that wall clock under the
+    /// device's *current* offset; fixed-time delivery ignores it and fires at
+    /// `at`. Within the ±14h a real zone can sit from UTC it fits an `i32` with
+    /// room to spare.
+    pub offset: i32,
 }
 
 /// One step of a task's checklist.
@@ -387,9 +425,6 @@ pub struct TodoPatch {
     pub archived_at: Option<Option<String>>,
     #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<String>", optional = nullable)]
-    pub reminder_at: Option<Option<String>>,
-    #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
-    #[ts(as = "Option<String>", optional = nullable)]
     pub notes: Option<Option<String>>,
     #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<String>", optional = nullable)]
@@ -418,6 +453,14 @@ pub struct TodoPatch {
     #[serde(default, with = "present", skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<f64>", optional = nullable)]
     pub sort_order: Option<Option<f64>>,
+    /// The whole reminder list, sent as one value like the tag set rather than as
+    /// a diff: absent leaves the reminders alone, an empty list clears them. This
+    /// is the shape the single `reminder_at` three-state option gave way to — a
+    /// list field replaces wholesale, so "no reminders" is `[]`, not the `null`
+    /// the old option carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reminders: Option<Vec<Reminder>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tag_ids: Option<Vec<String>>,
@@ -461,6 +504,9 @@ impl TodoPatch {
             validate_id(list_id)?;
         }
 
+        if let Some(reminders) = &self.reminders {
+            validate_reminders(reminders)?;
+        }
         if let Some(tag_ids) = &self.tag_ids {
             validate_id_list(tag_ids)?;
         }
@@ -508,6 +554,19 @@ fn validate_id_list(ids: &[String]) -> Result<(), ContractValidationError> {
         if ids[..index].contains(id) {
             return Err(ContractValidationError::DuplicateEntry);
         }
+    }
+    Ok(())
+}
+
+/// Reminders share the list ceiling every other list field is held to, so a task
+/// can never carry a set the database would refuse. The instant itself is left
+/// unchecked, exactly as the single `reminder_at` was: a value no reader can time
+/// is skipped when the reminder is weighed, not refused at the door — the same
+/// leniency the calendar export and the scheduler already apply to a stored
+/// instant.
+fn validate_reminders(reminders: &[Reminder]) -> Result<(), ContractValidationError> {
+    if reminders.len() > MAX_LIST_ENTRIES {
+        return Err(ContractValidationError::TooManyEntries);
     }
     Ok(())
 }
@@ -834,7 +893,7 @@ mod tests {
             completed_at: None,
             archived_at: None,
             due_date: None,
-            reminder_at: None,
+            reminders: Vec::new(),
             notes: None,
             start_date: None,
             starts_at: None,
@@ -885,6 +944,7 @@ mod tests {
         let decoded: Todo = serde_json::from_str(json).expect("decode a v1 payload");
 
         assert_eq!(decoded.due_date.as_deref(), Some("2026-07-20"));
+        assert!(decoded.reminders.is_empty());
         assert!(decoded.tag_ids.is_empty());
         assert!(decoded.subtasks.is_empty());
         assert!(decoded.attachments.is_empty());
@@ -955,6 +1015,16 @@ mod tests {
         original.tag_ids = vec!["tag-1".to_owned()];
         original.depends_on = vec!["todo-2".to_owned()];
         original.check_ins = vec!["2026-07-20".to_owned(), "2026-07-21".to_owned()];
+        original.reminders = vec![
+            Reminder {
+                at: "2026-07-20T09:00:00Z".to_owned(),
+                offset: 8 * 3_600,
+            },
+            Reminder {
+                at: "2026-07-20T08:00:00Z".to_owned(),
+                offset: 8 * 3_600,
+            },
+        ];
         original.subtasks = vec![Subtask {
             id: "step-1".to_owned(),
             title: "first step".to_owned(),
@@ -991,6 +1061,9 @@ mod tests {
             decoded.check_ins,
             vec!["2026-07-20".to_owned(), "2026-07-21".to_owned()]
         );
+        assert_eq!(decoded.reminders.len(), 2);
+        assert_eq!(decoded.reminders[0].at, "2026-07-20T09:00:00Z");
+        assert_eq!(decoded.reminders[0].offset, 8 * 3_600);
         assert_eq!(decoded.subtasks.len(), 1);
         assert!(decoded.subtasks[0].done);
         assert_eq!(decoded.attachments[0].url, "https://example.invalid/spec");
@@ -1201,14 +1274,16 @@ mod tests {
     #[test]
     fn a_patch_tells_clearing_a_field_from_not_mentioning_it() {
         let cleared: TodoPatch = serde_json::from_str(
-            r#"{"dueDate":null,"reminderAt":null,"notes":null,"startDate":null,
-                "startsAt":null,"endsAt":null,"estimatedMinutes":null}"#,
+            r#"{"dueDate":null,"notes":null,"startDate":null,
+                "startsAt":null,"endsAt":null,"estimatedMinutes":null,"reminders":[]}"#,
         )
         .expect("decode a patch that clears fields");
 
         // Mentioned, and set to nothing.
         assert_eq!(cleared.due_date, Some(None));
-        assert_eq!(cleared.reminder_at, Some(None));
+        // A reminder list clears by carrying an empty list, not the `null` a
+        // three-state option used: present-and-empty is "no reminders".
+        assert_eq!(cleared.reminders, Some(Vec::new()));
         assert_eq!(cleared.notes, Some(None));
         assert_eq!(cleared.start_date, Some(None));
         assert_eq!(cleared.starts_at, Some(None));

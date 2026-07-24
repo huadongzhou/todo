@@ -168,8 +168,10 @@ struct EventWindow {
 ///
 /// The order is the order of specificity: an explicit timed block beats the due
 /// date, and a reminder is used only when the task has no date of its own. A
-/// start date is deliberately not a candidate — it says when a task may begin,
-/// not that anything is happening that day.
+/// task may carry several reminder points (提醒通知/08); the earliest readable one
+/// places the event, so a reminder-only task still lands once, at its first
+/// reminder. A start date is deliberately not a candidate — it says when a task
+/// may begin, not that anything is happening that day.
 fn event_window(todo: &Todo, zone_offset_seconds: i64) -> Option<EventWindow> {
     if let Some(start) = todo.starts_at.as_deref().and_then(parse_instant) {
         let end = todo
@@ -197,9 +199,10 @@ fn event_window(todo: &Todo, zone_offset_seconds: i64) -> Option<EventWindow> {
         });
     }
 
-    todo.reminder_at
-        .as_deref()
-        .and_then(parse_instant)
+    todo.reminders
+        .iter()
+        .filter_map(|reminder| parse_instant(&reminder.at))
+        .min_by_key(|instant| instant.unix_seconds)
         .map(|instant| EventWindow {
             start: EventTime::Instant(instant.unix_seconds),
             end: None,
@@ -500,7 +503,7 @@ fn format_instant(unix_seconds: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use todo_contracts::TodoStatus;
+    use todo_contracts::{Reminder, TodoStatus};
 
     use super::*;
 
@@ -519,7 +522,7 @@ mod tests {
             completed_at: None,
             archived_at: None,
             due_date: None,
-            reminder_at: None,
+            reminders: Vec::new(),
             notes: None,
             start_date: None,
             starts_at: None,
@@ -657,7 +660,10 @@ mod tests {
     #[test]
     fn a_reminder_only_task_still_lands_on_the_calendar() {
         let mut reminded = todo("todo-5", "吃药");
-        reminded.reminder_at = Some("2026-07-24T12:00:00Z".to_owned());
+        reminded.reminders = vec![Reminder {
+            at: "2026-07-24T12:00:00Z".to_owned(),
+            offset: 0,
+        }];
 
         let calendar = build_calendar(&[reminded], EXPORTED_AT, DEVICE_AT_UTC);
         let lines = lines(&calendar.content);
@@ -987,7 +993,10 @@ mod tests {
             // of them cannot hide a panic on another.
             let mut probe = todo("todo-fuzz", "边界");
             probe.due_date = Some(value.clone());
-            probe.reminder_at = Some(value.clone());
+            probe.reminders = vec![Reminder {
+                at: value.clone(),
+                offset: 0,
+            }];
             probe.starts_at = Some(value.clone());
             probe.ends_at = Some(value.clone());
             let mut rule = weekly(Vec::new());

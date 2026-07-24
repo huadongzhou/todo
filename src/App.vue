@@ -790,6 +790,34 @@ async function duplicateTodo(id: string): Promise<void> {
             >
           </span>
         </label>
+        <!--
+          The time-zone policy for every reminder, at the end of the group: off by
+          default means reminders float to the local wall clock, so a "9:00"
+          reminder stays 9:00 after a zone change. On means they fire at the fixed
+          instant they were set at. The switch is global — "read my times as wall
+          clock or as fixed moments" is one mental model across all reminders, not a
+          per-reminder property (提醒通知/07/08).
+        -->
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.reminderTzAbsolute"
+            @change="
+              settingsStore.setReminderTzAbsolute(($event.target as HTMLInputElement).checked)
+            "
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100"
+              >按固定时刻触发提醒</span
+            >
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >默认按当地时间触发：换时区后，设「9:00」的提醒仍在当地 9:00
+              响。勾选后按设定时的绝对时刻触发，换时区后响铃的当地时间随之改变。</span
+            >
+          </span>
+        </label>
       </fieldset>
 
       <fieldset

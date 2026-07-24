@@ -209,7 +209,7 @@ mod tests {
             completed_at: None,
             archived_at: None,
             due_date: None,
-            reminder_at: None,
+            reminders: Vec::new(),
             notes: None,
             start_date: None,
             starts_at: None,
@@ -376,7 +376,10 @@ mod tests {
         // against — and a due date this build cannot read: neither nags.
         let plain = todo("a");
         let mut reminded_only = todo("b");
-        reminded_only.reminder_at = Some("2026-07-24T09:00:00Z".to_owned());
+        reminded_only.reminders = vec![todo_contracts::Reminder {
+            at: "2026-07-24T09:00:00Z".to_owned(),
+            offset: 0,
+        }];
         let unreadable = overdue("c", "sometime last week");
 
         let far_future = anchor("2026-07-24", UTC) + 1_000 * HOUR;

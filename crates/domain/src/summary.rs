@@ -282,7 +282,7 @@ mod tests {
             completed_at: None,
             archived_at: None,
             due_date: None,
-            reminder_at: None,
+            reminders: Vec::new(),
             notes: None,
             start_date: None,
             starts_at: None,

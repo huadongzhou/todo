@@ -417,7 +417,7 @@ function cancel(): void {
             :class="TONE_LABEL_CLASS[dueDateTone(todo.dueDate, completed)]"
           >
             {{ formatDueDate(todo.dueDate) }}
-            <span v-if="todo.reminderAt"> · 已设提醒</span>
+            <span v-if="todo.reminders.length"> · 已设提醒</span>
           </span>
           <!--
             Subtask progress: a read-only `n/m` badge, not a bar — a bar needs a

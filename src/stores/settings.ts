@@ -79,6 +79,16 @@ export const useSettingsStore = defineStore("settings", () => {
    * the same hour the "明天" snooze resolves to — so the two do not drift.
    */
   const morningSummaryTime = ref("09:00");
+  /**
+   * Whether reminders fire at their fixed absolute instant rather than floating to
+   * the device's wall clock (提醒通知/07/08). Off by default: a reminder set to
+   * "9:00" is meant to stay 9:00 wherever the user is, so it floats unless they ask
+   * for a fixed moment. Read natively by the reminder scheduler
+   * (`reminder_prefs.rs`), which reads a reminder's stored offset to keep its wall
+   * clock while the app is only in the tray, through the same `settings.json` this
+   * key is written to.
+   */
+  const reminderTzAbsolute = ref(false);
   const isReady = ref(false);
   const persistenceError = ref<string | null>(null);
   let unsubscribeSystemTheme: (() => void) | undefined;
@@ -113,6 +123,7 @@ export const useSettingsStore = defineStore("settings", () => {
       quietHoursEnd.value = await loadStringPreference("reminder.quiet.end", "08:00");
       morningSummaryEnabled.value = await loadBooleanPreference("reminder.summary.enabled", false);
       morningSummaryTime.value = await loadStringPreference("reminder.summary.time", "09:00");
+      reminderTzAbsolute.value = await loadBooleanPreference("reminder.tz.absolute", false);
       await applyTheme(theme.value);
       watchSystemTheme();
       writeDiagnostic("info", "Settings restored", {
@@ -130,6 +141,7 @@ export const useSettingsStore = defineStore("settings", () => {
         quietHoursEnd: quietHoursEnd.value,
         morningSummaryEnabled: morningSummaryEnabled.value,
         morningSummaryTime: morningSummaryTime.value,
+        reminderTzAbsolute: reminderTzAbsolute.value,
       });
     } catch {
       theme.value = "system";
@@ -146,6 +158,7 @@ export const useSettingsStore = defineStore("settings", () => {
       quietHoursEnd.value = "08:00";
       morningSummaryEnabled.value = false;
       morningSummaryTime.value = "09:00";
+      reminderTzAbsolute.value = false;
       persistenceError.value = "设置恢复失败，已使用系统默认值。";
       // The fallback itself must never throw: `main.ts` awaits `bootstrap()`
       // before mounting, so a second failure here would take the whole UI down
@@ -352,6 +365,23 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  async function setReminderTzAbsolute(enabled: boolean): Promise<void> {
+    reminderTzAbsolute.value = enabled;
+    persistenceError.value = null;
+
+    try {
+      await saveBooleanPreference("reminder.tz.absolute", enabled);
+      writeDiagnostic("info", "Reminder-timezone preference updated", {
+        reminderTzAbsolute: enabled,
+      });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Reminder-timezone preference could not be persisted", {
+        reminderTzAbsolute: enabled,
+      });
+    }
+  }
+
   return {
     theme,
     themeLabel,
@@ -368,6 +398,7 @@ export const useSettingsStore = defineStore("settings", () => {
     quietHoursEnd,
     morningSummaryEnabled,
     morningSummaryTime,
+    reminderTzAbsolute,
     isDesktop,
     isReady,
     persistenceError,
@@ -386,5 +417,6 @@ export const useSettingsStore = defineStore("settings", () => {
     setQuietHoursEnd,
     setMorningSummaryEnabled,
     setMorningSummaryTime,
+    setReminderTzAbsolute,
   };
 });

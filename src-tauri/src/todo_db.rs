@@ -2,11 +2,12 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
+use chrono::Local;
 use rusqlite::{params, Connection, Row};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use specta::Type;
-use todo_contracts::{ContractValidationError, RecurrenceRule, Todo, TodoStatus};
+use todo_contracts::{ContractValidationError, RecurrenceRule, Reminder, Todo, TodoStatus};
 
 /// Client-side SQLite storage for todos.
 ///
@@ -43,7 +44,10 @@ pub struct TodoDb {
 ///   attachments, dependencies.
 /// * 3 — archived_at, the instant a completed task was moved out of the list.
 /// * 4 — check_ins, the scheduled dates a daily/weekly habit was checked in on.
-const SCHEMA_VERSION: i64 = 4;
+/// * 5 — reminders, the list of reminder points that replaced the single
+///   reminder_at. The old column stays for the one-time fold in `initialise`
+///   (see `migrate_legacy_reminders`) and is otherwise dead.
+const SCHEMA_VERSION: i64 = 5;
 
 const CREATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY NOT NULL,
@@ -54,6 +58,7 @@ const CREATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS todos (
     archived_at TEXT,
     due_date TEXT,
     reminder_at TEXT,
+    reminders TEXT,
     notes TEXT,
     start_date TEXT,
     starts_at TEXT,
@@ -148,16 +153,17 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("depends_on", "TEXT"),
     ("archived_at", "TEXT"),
     ("check_ins", "TEXT"),
+    ("reminders", "TEXT"),
 ];
 
 const SELECT_TODOS: &str = "SELECT id, title, status, created_at, completed_at, archived_at,
-    due_date, reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes, recurrence,
+    due_date, reminders, notes, start_date, starts_at, ends_at, estimated_minutes, recurrence,
     list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on, check_ins
     FROM todos
     ORDER BY created_at DESC, id";
 
 const UPSERT_TODO: &str = "INSERT INTO todos (id, title, status, created_at, completed_at,
-    archived_at, due_date, reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes,
+    archived_at, due_date, reminders, notes, start_date, starts_at, ends_at, estimated_minutes,
     recurrence, list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on,
     check_ins)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
@@ -169,7 +175,7 @@ const UPSERT_TODO: &str = "INSERT INTO todos (id, title, status, created_at, com
         completed_at = excluded.completed_at,
         archived_at = excluded.archived_at,
         due_date = excluded.due_date,
-        reminder_at = excluded.reminder_at,
+        reminders = excluded.reminders,
         notes = excluded.notes,
         start_date = excluded.start_date,
         starts_at = excluded.starts_at,
@@ -350,7 +356,7 @@ fn row_to_todo(
         completed_at: row.get("completed_at")?,
         archived_at: row.get("archived_at")?,
         due_date: row.get("due_date")?,
-        reminder_at: row.get("reminder_at")?,
+        reminders: decode_json(row.get("reminders")?, "reminders", &id, unreadable),
         notes: row.get("notes")?,
         start_date: row.get("start_date")?,
         starts_at: row.get("starts_at")?,
@@ -433,6 +439,41 @@ fn reconcile_columns(connection: &Connection) -> Result<usize, rusqlite::Error> 
     Ok(added)
 }
 
+/// Folds the single `reminder_at` a task carried before multi-level reminders
+/// into the `reminders` list, once, for every row an earlier build wrote.
+///
+/// A lone reminder becomes one entry with its instant kept verbatim — so the
+/// delivery key it rode on is unchanged and the editor opens on the same wall
+/// clock — tagged with the device's offset at this moment. That offset is the best
+/// reading of the zone the reminder was set in, whose original was never stored:
+/// the user has almost certainly not travelled since, so the reminder reads the
+/// same under floating and fixed until they do (提醒通知/08, the migration's lossless
+/// upper bound). Only rows that predate the column are touched (`reminders IS
+/// NULL`) — a row this build has saved already carries the list, empty included,
+/// so the fold is idempotent and a deliberately emptied set is never refilled from
+/// the stale column.
+fn migrate_legacy_reminders(connection: &Connection) -> Result<usize, rusqlite::Error> {
+    let offset = Local::now().offset().local_minus_utc();
+    let legacy: Vec<(String, String)> = {
+        let mut statement = connection.prepare(
+            "SELECT id, reminder_at FROM todos WHERE reminder_at IS NOT NULL AND reminders IS NULL",
+        )?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+
+    let mut migrated = 0;
+    for (id, at) in legacy {
+        let reminders = vec![Reminder { at, offset }];
+        connection.execute(
+            "UPDATE todos SET reminders = ?1 WHERE id = ?2",
+            params![encode_json(&reminders)?, id],
+        )?;
+        migrated += 1;
+    }
+    Ok(migrated)
+}
+
 /// Creates the schema, brings an older file up to the current layout and
 /// records the schema revision. WAL keeps writes durable without an fsync per
 /// statement, which matters because every todo mutation writes immediately.
@@ -450,6 +491,14 @@ fn initialise(connection: &Connection) -> Result<(), rusqlite::Error> {
         log::info!(
             "Brought the todos table up to schema revision {SCHEMA_VERSION} (+{added} columns)"
         );
+    }
+    // Runs after the column reconcile, so the `reminders` column is always there to
+    // fold into. Moving data, not layout, so it does not touch the schema revision
+    // (see the note on SCHEMA_VERSION) and is safe to run every open — idempotent
+    // on rows already folded.
+    let folded = migrate_legacy_reminders(connection)?;
+    if folded > 0 {
+        log::info!("Folded {folded} legacy single reminders into the reminders list");
     }
 
     if stored == SCHEMA_VERSION {
@@ -551,7 +600,7 @@ impl TodoDb {
                     todo.completed_at,
                     todo.archived_at,
                     todo.due_date,
-                    todo.reminder_at,
+                    encode_json(&todo.reminders)?,
                     todo.notes,
                     todo.start_date,
                     todo.starts_at,
@@ -671,7 +720,8 @@ impl TodoDb {
 #[cfg(test)]
 mod tests {
     use todo_contracts::{
-        Attachment, AttachmentKind, RecurrenceCalendar, RecurrenceFrequency, Subtask, Weekday,
+        Attachment, AttachmentKind, RecurrenceCalendar, RecurrenceFrequency, Reminder, Subtask,
+        Weekday,
     };
 
     use super::*;
@@ -693,7 +743,7 @@ mod tests {
             completed_at: None,
             archived_at: None,
             due_date: None,
-            reminder_at: None,
+            reminders: Vec::new(),
             notes: None,
             start_date: None,
             starts_at: None,
@@ -872,16 +922,59 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].title, "from the old build");
         assert_eq!(stored[0].due_date.as_deref(), Some("2026-07-02"));
-        assert_eq!(
-            stored[0].reminder_at.as_deref(),
-            Some("2026-07-02T09:00:00Z")
-        );
+        // The v1 single reminder is folded into a one-entry list, its instant kept.
+        assert_eq!(stored[0].reminders.len(), 1);
+        assert_eq!(stored[0].reminders[0].at, "2026-07-02T09:00:00Z");
         // The fields the row predates read back empty rather than failing it.
         assert!(stored[0].tag_ids.is_empty());
         assert!(stored[0].subtasks.is_empty());
         assert!(stored[0].check_ins.is_empty());
         assert_eq!(stored[0].important, None);
         assert_eq!(stored[0].archived_at, None);
+    }
+
+    #[test]
+    fn a_legacy_single_reminder_is_folded_into_the_list_and_a_cleared_set_stays_cleared() {
+        // A row written before multi-level reminders: the single `reminder_at`
+        // column set, the `reminders` column absent. Initialising folds it into a
+        // one-entry list with the instant kept verbatim, so the delivery key and
+        // the displayed wall clock are unchanged (提醒通知/08 迁移无损).
+        let connection = Connection::open_in_memory().expect("open in-memory database");
+        connection
+            .execute_batch(V1_SCHEMA)
+            .expect("create v1 table");
+        connection
+            .execute(
+                "INSERT INTO todos (id, title, status, created_at, completed_at, due_date, \
+                 reminder_at) VALUES ('a', 'set on an old build', 'open', \
+                 '2026-07-01T00:00:00Z', NULL, NULL, '2026-07-24T09:00:00Z')",
+                [],
+            )
+            .expect("insert a v1 reminder row");
+        connection
+            .pragma_update(None, "user_version", 1)
+            .expect("stamp v1");
+
+        initialise(&connection).expect("migrate the old file");
+
+        let db = TodoDb {
+            connection: Some(Mutex::new(connection)),
+        };
+        let stored = db.list().expect("list todos").remove(0);
+        assert_eq!(stored.reminders.len(), 1);
+        assert_eq!(stored.reminders[0].at, "2026-07-24T09:00:00Z");
+
+        // Clearing the reminders and saving must stick: the stale `reminder_at`
+        // column must not refill the list on the next read — the fold only touches
+        // rows whose `reminders` column is still NULL.
+        let mut cleared = stored;
+        cleared.reminders = Vec::new();
+        db.save(&cleared).expect("save the cleared todo");
+        let read_back = db.list().expect("list todos").remove(0);
+        assert!(
+            read_back.reminders.is_empty(),
+            "an emptied reminder set must not be refilled from the legacy column"
+        );
     }
 
     #[test]
@@ -1043,6 +1136,16 @@ mod tests {
         stored.tag_ids = vec!["tag-1".to_owned(), "tag-2".to_owned()];
         stored.depends_on = vec!["b".to_owned()];
         stored.check_ins = vec!["2026-06-30".to_owned(), "2026-07-01".to_owned()];
+        stored.reminders = vec![
+            Reminder {
+                at: "2026-07-03T08:00:00Z".to_owned(),
+                offset: 8 * 3_600,
+            },
+            Reminder {
+                at: "2026-07-02T23:00:00Z".to_owned(),
+                offset: 8 * 3_600,
+            },
+        ];
         stored.subtasks = vec![Subtask {
             id: "step-1".to_owned(),
             title: "first step".to_owned(),
@@ -1084,6 +1187,9 @@ mod tests {
             read_back.check_ins,
             vec!["2026-06-30".to_owned(), "2026-07-01".to_owned()]
         );
+        assert_eq!(read_back.reminders.len(), 2);
+        assert_eq!(read_back.reminders[0].at, "2026-07-03T08:00:00Z");
+        assert_eq!(read_back.reminders[0].offset, 8 * 3_600);
         assert_eq!(read_back.depends_on, vec!["b".to_owned()]);
         assert_eq!(read_back.subtasks.len(), 1);
         assert!(read_back.subtasks[0].done);

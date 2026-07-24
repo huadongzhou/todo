@@ -1,6 +1,6 @@
 import { computed, ref, toRaw } from "vue";
 import { defineStore } from "pinia";
-import type { Attachment, RecurrenceRule, Subtask, Todo } from "@/types/todo";
+import type { Attachment, RecurrenceRule, Reminder, Subtask, Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import type { PageAlert } from "@/lib/page-alert";
 import { daysSinceLocalDay, isOverdue, todayLocalDay } from "@/lib/dueDate";
@@ -26,7 +26,7 @@ import { todoRepository } from "@/lib/todo-repository";
 export interface NewTodoInput {
   readonly title: string;
   readonly dueDate?: string | null;
-  readonly reminderAt?: string | null;
+  readonly reminders?: readonly Reminder[];
   readonly notes?: string | null;
   readonly startDate?: string | null;
   readonly startsAt?: string | null;
@@ -41,7 +41,7 @@ export type TodoEdit = Partial<
     Todo,
     | "title"
     | "dueDate"
-    | "reminderAt"
+    | "reminders"
     | "notes"
     | "startDate"
     | "startsAt"
@@ -61,7 +61,7 @@ type FieldChange = Pick<
   | "completedAt"
   | "archivedAt"
   | "dueDate"
-  | "reminderAt"
+  | "reminders"
   | "notes"
   | "startDate"
   | "startsAt"
@@ -162,6 +162,20 @@ function addCheckIn(checkIns: readonly string[], date: string): string[] {
     : next;
 }
 
+/**
+ * A reminder list moved by `shift` whole days, each point's wall clock kept on
+ * the new date and its offset carried across unchanged — the twin of what
+ * `shiftInstant` does for a single instant, for the whole list. An instant that
+ * cannot be parsed keeps its original string rather than being dropped, so a value
+ * no reader can time is not silently lost on an advance.
+ */
+function shiftReminders(reminders: readonly Reminder[], shift: number): Reminder[] {
+  return reminders.map((reminder) => ({
+    at: shiftInstant(reminder.at, shift) ?? reminder.at,
+    offset: reminder.offset,
+  }));
+}
+
 /** Undoing a change means writing back what the fields held before it. */
 function inverse(entry: HistoryEntry): HistoryEntry {
   switch (entry.kind) {
@@ -187,7 +201,7 @@ function patchFromTodo(todo: Todo): TodoPatch {
     completedAt: todo.completedAt,
     archivedAt: todo.archivedAt ?? null,
     dueDate: todo.dueDate ?? null,
-    reminderAt: todo.reminderAt ?? null,
+    reminders: todo.reminders,
     notes: todo.notes ?? null,
     startDate: todo.startDate ?? null,
     startsAt: todo.startsAt ?? null,
@@ -471,7 +485,7 @@ export const useTodoStore = defineStore("todos", () => {
       completedAt: null,
       archivedAt: null,
       dueDate: fields.dueDate ?? null,
-      reminderAt: fields.reminderAt ?? null,
+      reminders: fields.reminders ? [...fields.reminders] : [],
       notes: normalizeNotes(fields.notes),
       startDate: fields.startDate ?? null,
       startsAt: fields.startsAt ?? null,
@@ -503,7 +517,7 @@ export const useTodoStore = defineStore("todos", () => {
           title: todo.title,
           status: todo.status,
           dueDate: todo.dueDate,
-          reminderAt: todo.reminderAt,
+          reminders: todo.reminders,
           completedAt: todo.completedAt,
           archivedAt: todo.archivedAt,
           notes: todo.notes,
@@ -826,10 +840,14 @@ export const useTodoStore = defineStore("todos", () => {
     if (patch.dueDate !== undefined) {
       planField(plan, "dueDate", todo.dueDate ?? null, patch.dueDate);
     }
-    // The reminder travels too: it is an editable field, so leaving it out of
-    // the operation means a reminder changed here never reaches another device.
-    if (patch.reminderAt !== undefined) {
-      planField(plan, "reminderAt", todo.reminderAt ?? null, patch.reminderAt);
+    // The reminders travel too: they are an editable field, so leaving them out
+    // of the operation means a reminder changed here never reaches another device.
+    // The reminder sub-component hands back the very array it opened on when the
+    // list was left untouched, so the identity check in `planField` reads that as
+    // "unchanged" and writes nothing; a list the user changed is a new array and
+    // is written — the same shape recurrence uses.
+    if (patch.reminders !== undefined) {
+      planField(plan, "reminders", todo.reminders, patch.reminders);
     }
     if (patch.notes !== undefined) {
       planField(plan, "notes", todo.notes ?? null, normalizeNotes(patch.notes));
@@ -1055,9 +1073,9 @@ export const useTodoStore = defineStore("todos", () => {
       before.startDate = source.startDate;
       after.startDate = shiftLocalDate(source.startDate, shift);
     }
-    if (source.reminderAt) {
-      before.reminderAt = source.reminderAt;
-      after.reminderAt = shiftInstant(source.reminderAt, shift);
+    if (source.reminders.length > 0) {
+      before.reminders = source.reminders;
+      after.reminders = shiftReminders(source.reminders, shift);
     }
     if (source.startsAt) {
       before.startsAt = source.startsAt;
@@ -1130,9 +1148,10 @@ export const useTodoStore = defineStore("todos", () => {
       completedAt: null,
       archivedAt: null,
       dueDate: source.dueDate ?? null,
-      // Kept even when it has already passed: clearing it silently would read
-      // as a reminder that did not come across.
-      reminderAt: source.reminderAt ?? null,
+      // Kept even when they have already passed: clearing them silently would read
+      // as reminders that did not come across. A fresh array of copies so the two
+      // tasks never share a mutable list.
+      reminders: source.reminders.map((reminder) => ({ ...reminder })),
       notes: source.notes ?? null,
       startDate: source.startDate ?? null,
       startsAt: source.startsAt ?? null,
@@ -1194,7 +1213,7 @@ export const useTodoStore = defineStore("todos", () => {
       completedAt: null,
       archivedAt: null,
       dueDate: nextDate,
-      reminderAt: shiftInstant(source.reminderAt ?? null, shift),
+      reminders: shiftReminders(source.reminders, shift),
       notes: source.notes ?? null,
       startDate: shiftLocalDate(source.startDate ?? null, shift),
       startsAt: shiftInstant(source.startsAt ?? null, shift),
@@ -1414,7 +1433,7 @@ export const useTodoStore = defineStore("todos", () => {
     const shift = daysBetween(originalDue, due);
     const change: FieldChange = { dueDate: due };
     if (todo.startDate) change.startDate = shiftLocalDate(todo.startDate, shift);
-    if (todo.reminderAt) change.reminderAt = shiftInstant(todo.reminderAt, shift);
+    if (todo.reminders.length > 0) change.reminders = shiftReminders(todo.reminders, shift);
     if (todo.startsAt) change.startsAt = shiftInstant(todo.startsAt, shift);
     if (todo.endsAt) change.endsAt = shiftInstant(todo.endsAt, shift);
     // The counted-down rule only when it moved; an infinite rule is unchanged and
@@ -1447,7 +1466,7 @@ export const useTodoStore = defineStore("todos", () => {
       if (patch?.dueDate !== undefined) existing.dueDate = patch.dueDate;
       if (patch?.completedAt !== undefined) existing.completedAt = patch.completedAt;
       if (patch?.archivedAt !== undefined) existing.archivedAt = patch.archivedAt;
-      if (patch?.reminderAt !== undefined) existing.reminderAt = patch.reminderAt;
+      if (patch?.reminders !== undefined) existing.reminders = patch.reminders;
       if (patch?.notes !== undefined) existing.notes = patch.notes;
       if (patch?.startDate !== undefined) existing.startDate = patch.startDate;
       if (patch?.startsAt !== undefined) existing.startsAt = patch.startsAt;
@@ -1478,7 +1497,7 @@ export const useTodoStore = defineStore("todos", () => {
         completedAt: patch.completedAt ?? null,
         archivedAt: patch.archivedAt ?? null,
         dueDate: patch.dueDate ?? null,
-        reminderAt: patch.reminderAt ?? null,
+        reminders: patch.reminders ?? [],
         notes: patch.notes ?? null,
         startDate: patch.startDate ?? null,
         startsAt: patch.startsAt ?? null,
@@ -1513,7 +1532,7 @@ export const useTodoStore = defineStore("todos", () => {
     for (const todo of items.value) {
       // A locked task holds no reminder until its prerequisites are done, the
       // same gate `refreshReminder` applies on every later write.
-      if (todo.status === "open" && todo.reminderAt && !isLocked(todo)) {
+      if (todo.status === "open" && todo.reminders.length > 0 && !isLocked(todo)) {
         if (await scheduleReminder(todo)) scheduled += 1;
       }
     }

@@ -23,8 +23,8 @@ use todo_contracts::{RecurrenceRule, Todo};
 use todo_domain::{habit, ics, recurrence};
 #[cfg(test)]
 use todo_contracts::{
-    Attachment, AttachmentKind, HealthResponse, RecurrenceCalendar, RecurrenceFrequency, Subtask,
-    SyncOperationKind, SyncRequest, SyncResponse, TodoPatch, TodoStatus, TodoSyncChange,
+    Attachment, AttachmentKind, HealthResponse, RecurrenceCalendar, RecurrenceFrequency, Reminder,
+    Subtask, SyncOperationKind, SyncRequest, SyncResponse, TodoPatch, TodoStatus, TodoSyncChange,
     TodoSyncOperation, Weekday,
 };
 use ts_rs::TS;
@@ -713,6 +713,7 @@ mod tests {
         TodoStatus::export(&models_config).expect("failed to export TodoStatus type");
         TodoPatch::export(&models_config).expect("failed to export TodoPatch type");
         Subtask::export(&models_config).expect("export Subtask type");
+        Reminder::export(&models_config).expect("export Reminder type");
         Attachment::export(&models_config).expect("export Attachment type");
         AttachmentKind::export(&models_config).expect("export AttachmentKind type");
         RecurrenceRule::export(&models_config).expect("export RecurrenceRule type");

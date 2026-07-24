@@ -14,6 +14,20 @@ export function toInstant(value: string): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+/**
+ * Where this device sits, in seconds east of UTC — the `offset` a reminder point
+ * stores beside its instant (提醒通知/07/08).
+ *
+ * `getTimezoneOffset()` counts the other way (minutes west), so it is negated and
+ * scaled to seconds here, the same one-place conversion the calendar export makes.
+ * Captured when a reminder is set so its wall clock can be recovered: the native
+ * scheduler reads it to keep a floating reminder on the same wall clock as the
+ * device travels, and ignores it when the "fixed time" switch is on.
+ */
+export function currentZoneOffsetSeconds(): number {
+  return -new Date().getTimezoneOffset() * 60;
+}
+
 function pad(value: number): string {
   return String(value).padStart(2, "0");
 }

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { BellRing, X } from "lucide-vue-next";
 import Button from "@/components/ui/button/Button.vue";
+import { currentZoneOffsetSeconds } from "@/lib/datetime";
 import type { Todo } from "@/types/todo";
 import { useSettingsStore } from "@/stores/settings";
 import { useTodoStore } from "@/stores/todos";
@@ -13,10 +14,12 @@ import { useTodoStore } from "@/stores/todos";
  *
  * Snooze is not its own mechanism here — the native scheduler (提醒通知/01) polls
  * the database and raises whatever reminder is due and not yet delivered, so
- * "remind me later" is just "move `reminderAt` to a future instant": the next
- * poll finds the new `(id, reminderAt)` key and raises it then, while the key it
- * already delivered stays quiet. So every action on this bar is an ordinary
- * `todoStore.update`/`toggle`, and nothing new has to be persisted.
+ * "remind me later" is just moving the due reminder point to a future instant: the
+ * next poll finds the new `(id, at)` key and raises it then, while the key it
+ * already delivered stays quiet. A task carries a list of points (提醒通知/08); the
+ * bar acts on the one that has most recently come due, moving that point and
+ * leaving the task's other points untouched. So every action on this bar is an
+ * ordinary `todoStore.update`/`toggle`, and nothing new has to be persisted.
  *
  * The bar announces a snooze through the page's single live region rather than a
  * region of its own; it hands the sentence up to `App.vue` (the region's owner)
@@ -49,43 +52,66 @@ let ticker: ReturnType<typeof setInterval> | undefined;
 /**
  * Reminders the user has set aside this session — a skipped item, or every item
  * present when the bar was closed. Kept only in memory: skipping and closing are
- * "not now, and do not touch the data", so they must not write `reminderAt`. A
- * reminder that comes due later (a different task, or a snooze that expires) is a
- * new id-or-instant and is not in here, so the bar returns for it.
+ * "not now, and do not touch the data", so they must not write the task's
+ * reminders. A reminder that comes due later (a different task, or a snooze that
+ * expires) is a new id-or-instant and is not in here, so the bar returns for it.
  */
 const dismissed = ref<ReadonlySet<string>>(new Set());
 
 const actionsRef = ref<HTMLElement | null>(null);
 
 /**
- * The reminders due and still waiting, most-recently-due first.
+ * The instant of the task's most-recently-due reminder point at `cutoff`, or
+ * `null` when none of its points has come due yet. This is the point the bar
+ * shows and acts on: a task with several points surfaces once, for whichever has
+ * most recently arrived, and the earlier ones it already passed are behind it.
+ */
+function dueReminderIso(todo: Todo, cutoff: number): string | null {
+  let bestIso: string | null = null;
+  let bestAt = Number.NEGATIVE_INFINITY;
+  for (const reminder of todo.reminders) {
+    const at = Date.parse(reminder.at);
+    if (Number.isNaN(at) || at > cutoff) continue;
+    if (at > bestAt) {
+      bestAt = at;
+      bestIso = reminder.at;
+    }
+  }
+  return bestIso;
+}
+
+/**
+ * The tasks with a reminder point due and still waiting, most-recently-due first.
  *
  * The gate is the same one the native scheduler applies (提醒通知/01
  * `due_reminders`): open, not archived, not locked by a prerequisite, with a
- * reminder whose instant has passed. `visibleItems` already carries the single
- * reading of "archived", so this filters from it rather than repeating that test.
+ * reminder point whose instant has passed. `visibleItems` already carries the
+ * single reading of "archived", so this filters from it rather than repeating that
+ * test.
  */
 const matches = computed<Todo[]>(() => {
   const cutoff = now.value;
   return todoStore.visibleItems
     .filter((todo) => {
       if (todo.status !== "open") return false;
-      if (!todo.reminderAt) return false;
       if (dismissed.value.has(todo.id)) return false;
-      const at = Date.parse(todo.reminderAt);
-      if (Number.isNaN(at) || at > cutoff) return false;
+      if (dueReminderIso(todo, cutoff) === null) return false;
       return !todoStore.dependencyLock(todo.id).locked;
     })
-    .sort((left, right) => Date.parse(right.reminderAt!) - Date.parse(left.reminderAt!));
+    .sort(
+      (left, right) =>
+        Date.parse(dueReminderIso(right, cutoff)!) - Date.parse(dueReminderIso(left, cutoff)!),
+    );
 });
 
-/** The one reminder shown at a time; the rest wait their turn behind it. */
+/** The one task shown at a time; the rest wait their turn behind it. */
 const current = computed<Todo | null>(() => matches.value[0] ?? null);
 const remaining = computed(() => Math.max(0, matches.value.length - 1));
 
 const currentTitle = computed(() => current.value?.title ?? "");
 const currentSubline = computed(() => {
-  const at = current.value?.reminderAt;
+  const target = current.value;
+  const at = target ? dueReminderIso(target, now.value) : null;
   return at ? `已到点 · ${relativeSince(at, now.value)}` : "";
 });
 
@@ -191,9 +217,19 @@ function dismiss(id: string): void {
 function snooze(option: SnoozeOption): void {
   const target = current.value;
   if (!target) return;
-  // Moving `reminderAt` into the future is the whole of "snooze": the item leaves
-  // the due set at once, and the native poll raises it again at the new instant.
-  todoStore.update(target.id, { reminderAt: option.targetIso });
+  const dueIso = dueReminderIso(target, now.value);
+  if (!dueIso) return;
+  // Moving the due point into the future is the whole of "snooze": that point
+  // leaves the due set at once and the native poll raises it again at the new
+  // instant, while the task's other points are left where they are. The snoozed
+  // point is re-stamped with the current device offset, since the user is
+  // re-choosing its time here and now.
+  const reminders = target.reminders.map((reminder) =>
+    reminder.at === dueIso
+      ? { at: option.targetIso, offset: currentZoneOffsetSeconds() }
+      : reminder,
+  );
+  todoStore.update(target.id, { reminders });
   emit(
     "announce",
     `已稍后：${target.title} 将在 ${formatTarget(option.targetIso, now.value)} 再次提醒。`,

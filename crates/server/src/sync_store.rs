@@ -1192,7 +1192,7 @@ mod tests {
         let mut cleared = change("operation-1", 1);
         cleared.patch = Some(TodoPatch {
             due_date: Some(None),
-            reminder_at: Some(None),
+            reminders: Some(Vec::new()),
             notes: Some(None),
             estimated_minutes: Some(None),
             ..TodoPatch::default()
@@ -1208,7 +1208,9 @@ mod tests {
 
         let patch = read_back.patch.expect("the patch survives");
         assert_eq!(patch.due_date, Some(None));
-        assert_eq!(patch.reminder_at, Some(None));
+        // A reminder list clears by carrying an empty list, and that must survive
+        // the log the same way a nulled scalar does.
+        assert_eq!(patch.reminders, Some(Vec::new()));
         assert_eq!(patch.notes, Some(None));
         assert_eq!(patch.estimated_minutes, Some(None));
         // A field the operation never mentioned stays unmentioned.
@@ -1457,7 +1459,10 @@ mod tests {
             due_date: Some(Some("2026-07-24".to_owned())),
             completed_at: Some(Some("2026-07-23T10:00:00Z".to_owned())),
             archived_at: Some(Some("2026-07-30T00:00:05Z".to_owned())),
-            reminder_at: Some(Some("2026-07-24T09:00:00Z".to_owned())),
+            reminders: Some(vec![todo_contracts::Reminder {
+                at: "2026-07-24T09:00:00Z".to_owned(),
+                offset: 8 * 3_600,
+            }]),
             notes: Some(Some("the details".to_owned())),
             start_date: Some(Some("2026-07-22".to_owned())),
             starts_at: Some(Some("2026-07-22T08:00:00Z".to_owned())),
