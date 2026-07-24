@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>桌面小部件与系统集成 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01/02/04 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01·02·04 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 侧栏 / 底衬 */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-strong: #020617;    /* slate-950 强调标题 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --text-muted: #64748b;     /* slate-500 更弱说明 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --input-bg: #f1f5f9;       /* slate-100 输入底（App.vue CONTROL_CLASS bg-slate-100） */
+    --row-divider: #f1f5f9;    /* slate-100 行分隔 */
+    --circle-border: #cbd5e1;  /* slate-300 完成圈描边 */
+    --icon-muted: #94a3b8;     /* slate-400 图标默认 */
+    --icon-hover: #020617;     /* slate-950 图标 hover（dark 对应 slate-100） */
+    --danger-fg: #dc2626;      /* red-600 删除 hover 语义 */
+    /* ghost 按钮（Button.vue：text-slate-600 / hover:bg-slate-100 / hover:text-slate-950） */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（DESIGN.md 语义色，浅色「100 底 + 700 字」；与 01·02·04 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700 */
+    /* 今日卡片强调块（TodayCard bg-sky-100 text-sky-600；暗色按 info 令牌对补齐） */
+    --accent-chip-bg: #e0f2fe;  /* sky-100 */
+    --accent-chip-fg: #0284c7;  /* sky-600 */
+    /* 桌面/系统外观中性示意底（用 slate 阶，明确「非应用令牌」的系统层） */
+    --os-bg: #e2e8f0;          /* slate-200 桌面/任务栏中性底 */
+    --os-hatch: #cbd5e1;       /* slate-300 材质示意斜纹 */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-strong: #f8fafc;    /* slate-100 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --text-muted: #94a3b8;     /* slate-400 */
+    --border: #1e293b;         /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --input-bg: #0f172a;       /* slate-900 */
+    --row-divider: #1e293b;    /* slate-800 */
+    --circle-border: #475569;  /* slate-600 */
+    --icon-muted: #94a3b8;     /* slate-400 */
+    --icon-hover: #f8fafc;     /* slate-100 */
+    --danger-fg: #f87171;      /* red-400 */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+    --accent-chip-bg: rgba(12,74,110,0.4); /* sky-900/40 */
+    --accent-chip-fg: #7dd3fc;             /* sky-300 */
+    --os-bg: #0f172a;          /* slate-900 桌面/任务栏中性底 */
+    --os-hatch: #334155;       /* slate-700 材质示意斜纹 */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+
+  /* ===== 抬头（与 01·02·04 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* ===== 分区标题（与 01/03/07/09 section-title 同款） ===== */
+  .section-title { display: flex; align-items: baseline; gap: 12px; margin: 8px 0 6px; }
+  .section-title .idx {
+    font-size: 12px; font-weight: 600; color: #fff; background: #0ea5e9;
+    border-radius: 6px; padding: 2px 8px; letter-spacing: 0.04em;
+  }
+  .section-title h2 { font-size: 24px; line-height: 1.25; font-weight: 600; margin: 0; }
+  .section-sub { font-size: 13px; color: var(--text-secondary); margin: 0 0 18px; }
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+
+  /* 平台限定标注（复用 01 pending：amber soon 语义 + 三角图标 + 文字） */
+  .platform-note {
+    display: flex; gap: 12px; margin: 0 0 18px; padding: 12px 16px; border-radius: 8px;
+    background: var(--soon-bg); border: 1px solid rgba(180,83,9,0.25);
+  }
+  .dark .platform-note { border-color: rgba(252,211,77,0.25); }
+  .platform-note svg { color: var(--soon-fg); flex: none; margin-top: 1px; }
+  .platform-note .txt { font-size: 12px; line-height: 1.55; color: var(--soon-fg); }
+  .platform-note .txt b { font-weight: 700; }
+
+  /* 舞台 + 标注（与 04 card-stage/card-cap 同款语言） */
+  .stage { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+  .mock { display: flex; flex-direction: column; gap: 10px; }
+  .mock-cap { font-size: 12px; color: var(--text-secondary); text-align: center; max-width: 420px; }
+  .mock-cap b { color: var(--text); font-weight: 600; }
+
+  /* 系统外观中性示意底（桌面 / 任务栏；明确「非应用令牌」的 OS 层） */
+  .os-surface {
+    background: var(--os-bg); border-radius: 12px; border: 1px solid var(--border);
+    padding: 32px; position: relative;
+  }
+  .os-tag {
+    position: absolute; top: 10px; left: 14px;
+    font-size: 11px; font-weight: 500; color: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .os-tag svg { flex: none; }
+
+  /* 品牌图标块（复用 02 brand .logo） */
+  .logo {
+    border-radius: 8px; background: #0ea5e9;
+    display: flex; align-items: center; justify-content: center; color: #fff; flex: none;
+  }
+
+  /* kbd（与 02 同款） */
+  kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+    border-radius: 6px; padding: 2px 6px; line-height: 1.4;
+  }
+
+  /* ========== 迷你捕捉窗 ========== */
+  .capture { width: 420px; display: flex; flex-direction: column; overflow: hidden; }
+  .cap-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--row-divider); }
+  .cap-head .logo { width: 28px; height: 28px; }
+  .cap-title { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+  .cap-esc { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .cap-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .cap-input {
+    height: 48px; border-radius: 8px; background: var(--input-bg); color: var(--text);
+    font-size: 16px; padding: 0 14px; display: flex; align-items: center; border: none;
+  }
+  .cap-input.is-focus { box-shadow: 0 0 0 2px var(--ring-offset), 0 0 0 4px #0ea5e9; }
+  .cap-input .ph { color: var(--icon-muted); }
+  .cap-input .caret { width: 1.5px; height: 20px; background: #0ea5e9; margin-left: 1px; }
+  .opt-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .opt-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--card-bg); color: var(--ghost-text);
+    min-height: 34px;
+  }
+  .opt-chip svg { flex: none; }
+  .opt-chip.on { border-color: transparent; background: var(--info-bg); color: var(--info-fg); }
+  .opt-chip.on svg { color: var(--info-fg); }
+  .opt-chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .cap-foot { display: flex; align-items: center; gap: 12px; padding-top: 2px; }
+  .cap-hint { font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px; }
+  .cap-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border-radius: 8px; padding: 0 16px; height: 40px; font-size: 14px; font-weight: 500;
+    border: none; cursor: pointer; font-family: inherit;
+  }
+  .btn-default { background: #0ea5e9; color: #fff; font-weight: 600; }
+  .btn-ghost { background: transparent; color: var(--ghost-text); }
+  .btn.is-disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn svg { flex: none; }
+
+  /* ========== 托盘菜单 / 跳转列表 通用菜单 ========== */
+  .taskbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 14px; border-radius: 10px; background: var(--card-bg); border: 1px solid var(--border);
+  }
+  .tb-icon { width: 32px; height: 32px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--icon-muted); background: var(--nested-bg); position: relative; }
+  .tb-icon.app { background: #0ea5e9; color: #fff; }
+  .tb-divider { width: 1px; height: 24px; background: var(--border); }
+  .tb-clock { margin-left: auto; font-size: 12px; color: var(--text-secondary); text-align: right; line-height: 1.35; }
+
+  .menu { width: 248px; padding: 6px; }
+  .menu-header { padding: 10px 12px 12px; border-bottom: 1px solid var(--row-divider); margin-bottom: 6px; display: flex; align-items: center; gap: 10px; }
+  .menu-header .logo { width: 30px; height: 30px; }
+  .menu-header .mh-name { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+  .menu-header .mh-name span { color: #0ea5e9; }
+  .menu-header .mh-sub { font-size: 12px; color: var(--text-secondary); margin-top: 1px; }
+  .menu-item {
+    display: flex; align-items: center; gap: 10px; min-height: 40px;
+    padding: 8px 12px; border-radius: 6px; color: var(--text); font-size: 14px; cursor: pointer;
+  }
+  .menu-item .mi-ic { color: var(--icon-muted); flex: none; }
+  .menu-item .mi-lbl { flex: 1; min-width: 0; }
+  .menu-item .mi-cnt {
+    font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 9999px;
+    background: var(--info-bg); color: var(--info-fg); font-variant-numeric: tabular-nums;
+  }
+  .menu-item .mi-sc { font-size: 11px; color: var(--text-muted); }
+  .menu-item.hover { background: var(--ghost-hover-bg); color: var(--ghost-hover-text); }
+  .menu-item.hover .mi-ic { color: var(--ghost-hover-text); }
+  .menu-item.danger.hover { color: var(--danger-fg); }
+  .menu-item.danger.hover .mi-ic { color: var(--danger-fg); }
+  .menu-sep { height: 1px; background: var(--border); margin: 6px 8px; }
+  .menu-group-label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-secondary); padding: 8px 12px 4px;
+  }
+
+  /* ========== 任务栏角标 ========== */
+  .badge-stage { display: flex; align-items: flex-end; gap: 40px; flex-wrap: wrap; }
+  .app-tile { position: relative; width: 52px; height: 52px; }
+  .app-tile .logo { width: 52px; height: 52px; border-radius: 12px; }
+  .badge-count {
+    position: absolute; top: -7px; right: -7px; min-width: 22px; height: 22px; padding: 0 6px;
+    border-radius: 9999px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: #fff; border: 2px solid var(--os-bg);
+    font-variant-numeric: tabular-nums;
+  }
+  .badge-count.brand { background: #0ea5e9; }
+  .badge-count.overdue { background: #b91c1c; }
+  .dark .badge-count.overdue { background: #dc2626; }
+  .badge-legend { display: flex; flex-direction: column; gap: 6px; }
+  .badge-legend .bl-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .badge-legend .bl-sub { font-size: 12px; color: var(--text-secondary); max-width: 220px; line-height: 1.5; }
+
+  /* ========== Win11 小组件 ========== */
+  .widget-board { padding: 28px; }
+  .widget { display: flex; flex-direction: column; overflow: hidden; }
+  .widget.small { width: 232px; }
+  .widget.medium { width: 372px; }
+  .w-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--row-divider); }
+  .w-badge { width: 32px; height: 32px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--accent-chip-bg); color: var(--accent-chip-fg); }
+  .w-htext { min-width: 0; flex: 1; }
+  .w-title { font-size: 14px; font-weight: 600; color: var(--text-strong); margin: 0; }
+  .w-sub { font-size: 12px; color: var(--text-muted); margin: 0; }
+  .w-size { font-size: 11px; font-weight: 500; color: var(--text-secondary); padding: 2px 8px; border-radius: 9999px; background: var(--normal-bg); flex: none; }
+  .w-list { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+  .w-row { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 8px; }
+  .w-circle {
+    width: 20px; height: 20px; flex: none; border-radius: 9999px;
+    border: 1px solid var(--circle-border); background: var(--card-bg);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .w-circle svg { color: var(--icon-muted); }
+  .w-main { min-width: 0; flex: 1; }
+  .w-rowtitle { font-size: 13px; color: #334155; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dark .w-rowtitle { color: #e2e8f0; }
+  .w-due { display: inline-block; margin-top: 2px; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 500; }
+  .w-due.due-overdue { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .w-due.due-soon    { background: var(--soon-bg);    color: var(--soon-fg); }
+  .w-due.due-normal  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .w-more { font-size: 12px; color: var(--text-secondary); padding: 6px 10px 4px; }
+  .w-foot { padding: 8px 10px 10px; }
+  .w-quick {
+    display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px;
+    padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--border);
+    background: transparent; color: var(--text-secondary); font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  .w-quick svg { flex: none; color: var(--icon-muted); }
+  .w-empty { display: grid; place-items: center; text-align: center; padding: 28px 20px; }
+  .w-empty-badge { width: 36px; height: 36px; margin: 0 auto 10px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: var(--accent-chip-bg); color: var(--accent-chip-fg); }
+  .w-empty .ee { font-size: 13px; font-weight: 600; color: var(--text-strong); margin: 0; }
+  .w-empty .es { font-size: 12px; color: var(--text-muted); margin: 3px 0 0; }
+
+  /* ========== Mica 视觉融合 ========== */
+  /* 系统合成材质示意：斜纹 hatch（明确为「系统层」的图示纹理，非应用渐变） */
+  .mica-material {
+    background-color: var(--os-bg);
+    background-image: repeating-linear-gradient(135deg,
+      var(--os-hatch) 0, var(--os-hatch) 1px,
+      transparent 1px, transparent 9px);
+  }
+  .mica-window { width: 536px; display: flex; flex-direction: column; overflow: hidden; }
+  .mica-window.inactive .mica-material { background-image: none; }  /* 失焦：Mica 回落纯色（Windows 行为） */
+  .mw-titlebar { position: relative; display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 44px; border-bottom: 1px solid var(--border); }
+  .mw-titlebar .logo { width: 22px; height: 22px; border-radius: 6px; }
+  .mw-titlebar .mw-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+  .mw-titlebar .mw-name span { color: #0ea5e9; }
+  .mw-ctrls { margin-left: auto; display: flex; align-items: center; gap: 14px; color: var(--icon-muted); }
+  .mw-ctrls svg { flex: none; }
+  .mw-body { display: flex; min-height: 208px; }
+  .mw-side { width: 168px; flex: none; border-right: 1px solid var(--border); padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; }
+  .mw-nav { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--text); }
+  .mw-nav svg { flex: none; color: var(--icon-muted); }
+  .mw-nav.active { background: var(--info-bg); color: var(--info-fg); }
+  .mw-nav.active svg { color: var(--info-fg); }
+  .mw-content { flex: 1; min-width: 0; padding: 14px; background: var(--page-bg); }
+  .mw-content-tag { font-size: 11px; color: var(--text-muted); margin: 0 0 8px; display: inline-flex; align-items: center; gap: 5px; }
+  .mw-card { padding: 12px 14px; }
+  .mw-card .mc-row { display: flex; align-items: center; gap: 10px; }
+  .mw-card .mc-row + .mc-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--row-divider); }
+  .mw-card .mc-circle { width: 18px; height: 18px; flex: none; border-radius: 9999px; border: 1px solid var(--circle-border); }
+  .mw-card .mc-t { font-size: 13px; color: #334155; }
+  .dark .mw-card .mc-t { color: #e2e8f0; }
+  .mw-tag-badge {
+    position: absolute; top: 8px; right: 12px;
+    font-size: 11px; font-weight: 500; color: var(--text-secondary);
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 9999px; padding: 2px 8px;
+  }
+
+  /* Mica 层次图例 */
+  .mica-legend { display: flex; flex-direction: column; gap: 12px; max-width: 300px; }
+  .ml-item { display: flex; align-items: flex-start; gap: 12px; }
+  .ml-swatch { width: 40px; height: 40px; flex: none; border-radius: 8px; border: 1px solid var(--border); }
+  .ml-swatch.wall { background: var(--os-bg); }
+  .ml-swatch.mica { background-color: var(--os-bg); background-image: repeating-linear-gradient(135deg, var(--os-hatch) 0, var(--os-hatch) 1px, transparent 1px, transparent 9px); }
+  .ml-swatch.surface { background: var(--card-bg); box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+  .ml-txt .ml-t { font-size: 13px; font-weight: 600; color: var(--text); }
+  .ml-txt .ml-d { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-top: 2px; }
+
+  .rel-note { margin-top: 18px; padding: 14px 16px; border-radius: 10px; background: var(--info-bg); color: var(--info-fg); }
+  .rel-note .rn-lead { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+  .rel-note .rn-lead svg { flex: none; }
+  .rel-note .rn-body { font-size: 12px; line-height: 1.6; margin-top: 6px; }
+
+  .foot-note { text-align: center; margin-top: 20px; }
+  .divider-line { height: 1px; background: var(--border); margin: 34px 0 28px; border: none; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>桌面小部件与系统集成</h1>
+      <p class="lead">迷你捕捉窗 · 托盘菜单 · 任务栏角标与跳转列表 · Win11 小组件 · Mica 视觉融合 · 浅暗成对</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <!-- ============ 01 迷你捕捉窗 ============ -->
+  <div class="section-title"><span class="idx">集成 01</span><h2>迷你捕捉窗</h2></div>
+  <p class="section-sub">全局快捷键唤起的快速新增小窗 · 标题输入 + 可选截止/清单 + 添加 + Esc 关闭 · 低摩擦录入</p>
+
+  <div class="os-surface" style="margin-bottom:14px">
+    <span class="os-tag">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+      桌面任意位置浮层 · 中性示意
+    </span>
+    <div class="stage" style="justify-content:center;padding-top:8px">
+
+      <!-- 常态：空、聚焦待输入 -->
+      <div class="mock">
+        <div class="surface-card capture">
+          <div class="cap-head">
+            <span class="logo">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+            <span class="cap-title">快速添加</span>
+            <span class="cap-esc"><kbd>Esc</kbd> 关闭</span>
+          </div>
+          <div class="cap-body">
+            <div class="cap-input is-focus"><span class="ph">输入待办，回车即存…</span><span class="caret"></span></div>
+            <div class="opt-row">
+              <span class="opt-chip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                截止日期
+              </span>
+              <span class="opt-chip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></svg>
+                清单
+              </span>
+            </div>
+            <div class="cap-foot">
+              <span class="cap-hint"><kbd>Enter</kbd> 添加并留在此</span>
+              <div class="cap-actions">
+                <button class="btn btn-default is-disabled" type="button" aria-disabled="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  添加
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mock-cap"><b>常态</b> · 空输入自动聚焦，标题为空时「添加」禁用，可选项未选</div>
+      </div>
+
+      <!-- 激活态：已输入 + 选了截止/清单 -->
+      <div class="mock">
+        <div class="surface-card capture">
+          <div class="cap-head">
+            <span class="logo">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+            <span class="cap-title">快速添加</span>
+            <span class="cap-esc"><kbd>Esc</kbd> 关闭</span>
+          </div>
+          <div class="cap-body">
+            <div class="cap-input is-focus"><span style="color:var(--text)">整理季度计划并同步团队</span><span class="caret"></span></div>
+            <div class="opt-row">
+              <span class="opt-chip on">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                今天 18:00
+              </span>
+              <span class="opt-chip on">
+                <span class="dot" style="background:#0ea5e9"></span>
+                工作
+              </span>
+            </div>
+            <div class="cap-foot">
+              <span class="cap-hint"><kbd>Enter</kbd> 添加并留在此</span>
+              <div class="cap-actions">
+                <button class="btn btn-ghost" type="button">取消</button>
+                <button class="btn btn-default" type="button">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  添加
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mock-cap"><b>激活态</b> · 已输入标题、选中「今天 18:00」与「工作」清单，「添加」可用</div>
+      </div>
+
+    </div>
+  </div>
+  <p class="caption">全局快捷键 <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 唤起（与主窗空态提示同一快捷键）。窗体复用 surface-card、输入底 slate-100、可选项复用胶囊/语义色，选中态借 info（sky）令牌对；主操作单一（添加），Esc 随时关闭。</p>
+
+  <hr class="divider-line" />
+
+  <!-- ============ 02 托盘菜单 ============ -->
+  <div class="section-title"><span class="idx">集成 02</span><h2>托盘菜单</h2></div>
+  <p class="section-sub">右键系统托盘图标弹出 · 今日待办数 / 快速新增 / 打开主窗 / 退出 · 常态与悬停态</p>
+
+  <div class="os-surface">
+    <span class="os-tag">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="12" x="3" y="6" rx="2"/><path d="M7 18v2"/><path d="M17 18v2"/></svg>
+      系统托盘 · 中性示意
+    </span>
+    <div style="display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start;justify-content:center;padding-top:8px">
+
+      <!-- 托盘图标条 + 常态菜单 -->
+      <div class="mock">
+        <div class="taskbar" style="width:340px;margin-bottom:6px">
+          <span class="tb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg></span>
+          <span class="tb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-6 6c0 7-3 9-3 9h18s-3-2-3-9a6 6 0 0 0-6-6Z"/></svg></span>
+          <span class="tb-icon app" title="Just Do 托盘图标"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+          <span class="tb-divider"></span>
+          <span class="tb-clock num">14:08<br>7/25</span>
+        </div>
+        <div class="surface-card menu">
+          <div class="menu-header">
+            <span class="logo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+            <div>
+              <div class="mh-name">Just<span> Do</span></div>
+              <div class="mh-sub num">今日 4 项待办 · 1 项逾期</div>
+            </div>
+          </div>
+          <div class="menu-item">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            <span class="mi-lbl">快速新增</span>
+            <span class="mi-sc">Ctrl+Shift+Space</span>
+          </div>
+          <div class="menu-item">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M3 9h18"/></svg>
+            <span class="mi-lbl">打开主窗</span>
+          </div>
+          <div class="menu-sep"></div>
+          <div class="menu-item danger">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+            <span class="mi-lbl">退出</span>
+          </div>
+        </div>
+        <div class="mock-cap"><b>常态</b> · 头部显今日待办数，快速新增带全局快捷键提示</div>
+      </div>
+
+      <!-- 悬停态菜单 -->
+      <div class="mock">
+        <div class="taskbar" style="width:340px;margin-bottom:6px;visibility:hidden" aria-hidden="true"></div>
+        <div class="surface-card menu">
+          <div class="menu-header">
+            <span class="logo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+            <div>
+              <div class="mh-name">Just<span> Do</span></div>
+              <div class="mh-sub num">今日 4 项待办 · 1 项逾期</div>
+            </div>
+          </div>
+          <div class="menu-item hover">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            <span class="mi-lbl">快速新增</span>
+            <span class="mi-sc">Ctrl+Shift+Space</span>
+          </div>
+          <div class="menu-item">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M3 9h18"/></svg>
+            <span class="mi-lbl">打开主窗</span>
+          </div>
+          <div class="menu-sep"></div>
+          <div class="menu-item danger hover">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+            <span class="mi-lbl">退出</span>
+          </div>
+        </div>
+        <div class="mock-cap"><b>激活态</b> · 悬停项显浅底（ghost hover），「退出」为破坏性、hover 转 red 语义</div>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="divider-line" />
+
+  <!-- ============ 03 任务栏角标 + 跳转列表 ============ -->
+  <div class="section-title"><span class="idx">集成 03</span><h2>任务栏角标 + 跳转列表</h2></div>
+  <p class="section-sub">应用图标角标显未完成数 · 右键跳转列表（快速新增 / 今日）· 常态与悬停态</p>
+
+  <div style="display:flex;flex-wrap:wrap;gap:28px;align-items:stretch">
+
+    <!-- 角标 -->
+    <section class="surface-card" style="flex:1;min-width:420px;padding:24px">
+      <div style="font-size:18px;font-weight:600;margin-bottom:4px">任务栏图标角标</div>
+      <div class="caption" style="margin-bottom:20px">图标右上角小徽标显未完成数；无逾期时用品牌 sky，出现逾期升级为 red 语义提示需处理。</div>
+      <div class="os-surface" style="padding:28px 24px">
+        <span class="os-tag">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="12" x="3" y="6" rx="2"/></svg>
+          任务栏 · 中性示意
+        </span>
+        <div class="badge-stage" style="padding-top:8px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+            <div class="app-tile">
+              <span class="logo"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="badge-count brand num">4</span>
+            </div>
+            <span class="caption">未完成 4 · 品牌 sky</span>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+            <div class="app-tile">
+              <span class="logo"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="badge-count overdue num">2</span>
+            </div>
+            <span class="caption">含逾期 2 · red 语义</span>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+            <div class="app-tile">
+              <span class="logo"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+            </div>
+            <span class="caption">全部完成 · 无角标</span>
+          </div>
+        </div>
+      </div>
+      <p class="caption" style="margin-top:14px">角标为图形元素（数字）：品牌 sky 沿用 DESIGN.md 已记录的 sky 白字对比偏差，不重复另标；逾期变体用 red-700（浅）/ red-600（暗）底白字，对比达标。计数与列表到期口径同源。</p>
+    </section>
+
+    <!-- 跳转列表 -->
+    <section class="surface-card" style="flex:1;min-width:420px;padding:24px">
+      <div style="font-size:18px;font-weight:600;margin-bottom:4px">Windows 跳转列表</div>
+      <div class="caption" style="margin-bottom:20px">右键任务栏图标弹出，提供常用动作直达；分组标签 + 菜单项，复用托盘菜单同款视觉。</div>
+      <div class="os-surface" style="padding:24px;display:flex;justify-content:center">
+        <div class="surface-card menu" style="width:288px">
+          <div class="menu-group-label">任务</div>
+          <div class="menu-item hover">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            <span class="mi-lbl">快速新增</span>
+          </div>
+          <div class="menu-item">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            <span class="mi-lbl">今天</span>
+            <span class="mi-cnt num">4</span>
+          </div>
+          <div class="menu-sep"></div>
+          <div class="menu-item">
+            <svg class="mi-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M3 9h18"/></svg>
+            <span class="mi-lbl">打开主窗</span>
+          </div>
+        </div>
+      </div>
+      <p class="caption" style="margin-top:14px">「今天」= 我的一天入口（唯一今日入口，与 04 收敛一致），带今日项计数；悬停项显浅底。跳转列表由系统渲染，此为结构/文案示意。</p>
+    </section>
+
+  </div>
+
+  <hr class="divider-line" />
+
+  <!-- ============ 04 Win11 小组件 ============ -->
+  <div class="section-title"><span class="idx">集成 04</span><h2>Win11 小组件</h2></div>
+  <p class="section-sub">Widgets 板中的小部件卡 · 今日待办列表 · 小 / 中两种尺寸</p>
+
+  <div class="platform-note">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div class="txt"><b>平台限定：</b>桌面/移动小组件需各自原生工程实现（Win11 Widgets Board 用 Adaptive Cards、iOS 用 WidgetKit、Android 用 AppWidget），非当前 Tauri 视图端可直接产出。此稿为视觉结构与文案示意，标注平台限定，复现落各原生模块。</div>
+  </div>
+
+  <div class="os-surface widget-board">
+    <span class="os-tag">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+      Widgets 板 · 中性示意
+    </span>
+    <div class="stage" style="justify-content:center;padding-top:8px;gap:32px">
+
+      <!-- 小尺寸 -->
+      <div class="mock">
+        <div class="surface-card widget small">
+          <div class="w-head">
+            <span class="w-badge">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>
+            </span>
+            <div class="w-htext">
+              <p class="w-title">今日待办</p>
+              <p class="w-sub num">4 项待完成</p>
+            </div>
+          </div>
+          <div class="w-list">
+            <div class="w-row">
+              <span class="w-circle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <div class="w-main"><p class="w-rowtitle">提交季度预算表</p><span class="w-due due-overdue">逾期 2 天</span></div>
+            </div>
+            <div class="w-row">
+              <span class="w-circle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <div class="w-main"><p class="w-rowtitle">完成产品评审并同步</p><span class="w-due due-soon">今天</span></div>
+            </div>
+          </div>
+          <div class="w-more num">还有 2 项 · 点击打开我的一天</div>
+        </div>
+        <div class="mock-cap"><b>小尺寸</b> · 顶 2 项 + 汇总，点击整卡进「我的一天」</div>
+      </div>
+
+      <!-- 中尺寸 -->
+      <div class="mock">
+        <div class="surface-card widget medium">
+          <div class="w-head">
+            <span class="w-badge">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>
+            </span>
+            <div class="w-htext">
+              <p class="w-title">今日待办</p>
+              <p class="w-sub num">7月25日 · 4 项待完成</p>
+            </div>
+            <span class="w-size">中</span>
+          </div>
+          <div class="w-list">
+            <div class="w-row">
+              <span class="w-circle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <div class="w-main"><p class="w-rowtitle">提交季度预算表</p><span class="w-due due-overdue">逾期 2 天</span></div>
+            </div>
+            <div class="w-row">
+              <span class="w-circle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <div class="w-main"><p class="w-rowtitle">完成产品评审并同步团队</p><span class="w-due due-soon">今天</span></div>
+            </div>
+            <div class="w-row">
+              <span class="w-circle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <div class="w-main"><p class="w-rowtitle">阅读 30 分钟</p><span class="w-due due-soon">今天</span></div>
+            </div>
+            <div class="w-row">
+              <span class="w-circle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <div class="w-main"><p class="w-rowtitle">整理设计走查清单</p><span class="w-due due-normal">3 天后</span></div>
+            </div>
+          </div>
+          <div class="w-foot">
+            <button class="w-quick" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+              快速新增到今天…
+            </button>
+          </div>
+        </div>
+        <div class="mock-cap"><b>中尺寸</b> · 完整今日清单 + 底部快速新增；勾选/新增回写主数据</div>
+      </div>
+
+      <!-- 空态 -->
+      <div class="mock">
+        <div class="surface-card widget small">
+          <div class="w-head">
+            <span class="w-badge">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>
+            </span>
+            <div class="w-htext">
+              <p class="w-title">今日待办</p>
+              <p class="w-sub num">0 项待完成</p>
+            </div>
+          </div>
+          <div class="w-empty">
+            <div>
+              <div class="w-empty-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              <p class="ee">今日暂无待办</p>
+              <p class="es">享受你的清闲时光。</p>
+            </div>
+          </div>
+        </div>
+        <div class="mock-cap"><b>空态</b> · 与今日卡片同款文案，不留白屏</div>
+      </div>
+
+    </div>
+  </div>
+  <p class="caption" style="margin-top:14px">小部件复用今日卡片语言（TodayCard 徽标块 + 待办行 + 到期语义色 + 空态文案），保证与桌面卡片、主窗列表跨面一致；数据只读今日清单，勾选/新增回写同一数据源。</p>
+
+  <hr class="divider-line" />
+
+  <!-- ============ 05 Mica 视觉融合 ============ -->
+  <div class="section-title"><span class="idx">集成 05</span><h2>Mica 视觉融合</h2></div>
+  <p class="section-sub">主窗采用 Windows 11 Mica 材质融合的示意 · 与既有 surface 令牌的关系 · 窗口聚焦/失焦两态</p>
+
+  <div class="platform-note">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div class="txt"><b>平台限定：</b>Mica 是 Windows 11 的窗口背景材质，在原生窗口层（src-tauri 窗口配置 / WinUI 合成）启用，非应用内 CSS 样式、不新增设计令牌。DESIGN.md 禁装饰性 backdrop-blur/渐变——此处斜纹仅为「系统合成层」图示纹理，应用内容表面仍保持 slate 令牌扁平不透明。</div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start">
+
+    <!-- 融合示意窗（聚焦/失焦两态） -->
+    <div class="stage" style="flex:1;min-width:560px">
+      <!-- 聚焦态：Mica 生效 -->
+      <div class="mock">
+        <div class="surface-card mica-window">
+          <div class="mw-titlebar mica-material">
+            <span class="logo"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+            <span class="mw-name">Just<span> Do</span></span>
+            <span class="mw-ctrls">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </span>
+            <span class="mw-tag-badge">Mica 材质</span>
+          </div>
+          <div class="mw-body">
+            <aside class="mw-side mica-material">
+              <div class="mw-nav active">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                我的一天
+              </div>
+              <div class="mw-nav">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                计划
+              </div>
+              <div class="mw-nav">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                已完成
+              </div>
+            </aside>
+            <div class="mw-content">
+              <p class="mw-content-tag">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>
+                内容表面 · surface-card 不透明
+              </p>
+              <div class="surface-card mw-card">
+                <div class="mc-row"><span class="mc-circle"></span><span class="mc-t">完成产品评审并同步团队</span></div>
+                <div class="mc-row"><span class="mc-circle"></span><span class="mc-t">提交季度预算表</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mock-cap"><b>聚焦态</b> · 标题栏 / 侧栏让位给 Mica 材质，内容卡仍 surface-card 不透明</div>
+      </div>
+
+      <!-- 失焦态：Mica 回落纯色 -->
+      <div class="mock">
+        <div class="surface-card mica-window inactive">
+          <div class="mw-titlebar mica-material" style="background-color:var(--nested-bg)">
+            <span class="logo" style="opacity:.85"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+            <span class="mw-name" style="color:var(--text-secondary)">Just Do</span>
+            <span class="mw-ctrls" style="opacity:.6">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </span>
+            <span class="mw-tag-badge">回落纯色</span>
+          </div>
+          <div class="mw-body">
+            <aside class="mw-side" style="background:var(--nested-bg)">
+              <div class="mw-nav active">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                我的一天
+              </div>
+              <div class="mw-nav">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                计划
+              </div>
+              <div class="mw-nav">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                已完成
+              </div>
+            </aside>
+            <div class="mw-content">
+              <p class="mw-content-tag">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>
+                内容表面 · 不受窗口焦点影响
+              </p>
+              <div class="surface-card mw-card">
+                <div class="mc-row"><span class="mc-circle"></span><span class="mc-t">完成产品评审并同步团队</span></div>
+                <div class="mc-row"><span class="mc-circle"></span><span class="mc-t">提交季度预算表</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mock-cap"><b>失焦态</b> · 窗口失焦时 Mica 回落纯色底（Windows 行为），侧栏用 nested-bg，内容不变</div>
+      </div>
+    </div>
+
+    <!-- 层次图例 + 关系说明 -->
+    <section class="surface-card" style="width:340px;flex:none;padding:24px">
+      <div style="font-size:18px;font-weight:600;margin-bottom:4px">层次与令牌关系</div>
+      <div class="caption" style="margin-bottom:18px">从系统到应用，自下而上三层。</div>
+      <div class="mica-legend">
+        <div class="ml-item">
+          <span class="ml-swatch wall"></span>
+          <div class="ml-txt"><div class="ml-t">① 桌面壁纸</div><div class="ml-d">系统层，用户桌面背景，应用不控制。</div></div>
+        </div>
+        <div class="ml-item">
+          <span class="ml-swatch mica"></span>
+          <div class="ml-txt"><div class="ml-t">② Mica 合成材质</div><div class="ml-d">窗口标题栏 / 侧栏底层，取壁纸主色微调，随系统浅暗切换；原生窗口层启用，非应用令牌。</div></div>
+        </div>
+        <div class="ml-item">
+          <span class="ml-swatch surface"></span>
+          <div class="ml-txt"><div class="ml-t">③ 应用内容表面</div><div class="ml-d">surface-card / page-bg，slate 令牌，保持扁平不透明，读性与跨端一致优先。</div></div>
+        </div>
+      </div>
+      <div class="rel-note" role="note">
+        <div class="rn-lead">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          与 surface 令牌的关系
+        </div>
+        <div class="rn-body">仅窗口「外壳」（标题栏、可选侧栏底）让位给 Mica 求得系统原生融合；承载内容的 surface-card 与 page-bg 不改，仍是 slate 令牌的扁平表面。浅/暗由既有 data-theme 驱动，Mica 亦随之，无需另立色板。</div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="caption foot-note">跨端待办应用 · 桌面小部件与系统集成 · 令牌唯一事实源 DESIGN.md · 复用 01/02/04 组件与待办行 · 平台限定项已标注 · 浅色 / 暗色成对</div>
+
+</div>
+</body>
+</html>
