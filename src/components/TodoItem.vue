@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Check, Copy, Flame, Repeat, SlidersHorizontal, Trash2 } from "lucide-vue-next";
+import { Check, Copy, Flame, ListChecks, Repeat, SlidersHorizontal, Trash2 } from "lucide-vue-next";
 import type { HabitProgress } from "@/bindings/commands";
 import Button from "@/components/ui/button/Button.vue";
+import SubtaskList from "@/components/SubtaskList.vue";
 import TodoFields, {
   createEmptyDraft,
   draftFromTodo,
@@ -67,6 +68,15 @@ const detailsOpen = ref(false);
 const completed = computed(() => props.todo.status === "completed");
 /** A task whose start date has not arrived yet: set, but nothing to do about. */
 const notStarted = computed(() => isNotStarted(props.todo.startDate, completed.value));
+
+/**
+ * How many of the task's steps are done, shown on the collapsed row as `n/m`.
+ * Only meaningful with at least one step — `0/0` is no progress at all, so the
+ * badge is absent then rather than reading as a stalled bar (界定 b). The count
+ * is a pure derivation of the checklist, so it moves the moment a step is ticked.
+ */
+const subtaskDone = computed(() => props.todo.subtasks.filter((subtask) => subtask.done).length);
+const subtaskTotal = computed(() => props.todo.subtasks.length);
 
 /**
  * The repeat rule when this row is a habit (a daily or weekly one), else `null`.
@@ -268,6 +278,15 @@ function cancel(): void {
         </template>
       </TodoFields>
 
+      <!--
+        The checklist region, a sibling of the field block rather than a field in
+        it: anything inside <TodoFields> would also show in the create form, which
+        the checklist must not (it belongs to an existing task). It commits its own
+        edits straight to the store, so it rides neither this form's Enter-to-save
+        nor its Esc-to-cancel.
+      -->
+      <SubtaskList :todo="todo" />
+
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="m-0 text-xs text-slate-500 dark:text-slate-400">Enter 保存 · Esc 取消</p>
         <div class="flex gap-2">
@@ -334,7 +353,7 @@ function cancel(): void {
           scrolling the row sideways.
         -->
         <p
-          v-if="todo.dueDate || todo.recurrence || notStarted"
+          v-if="todo.dueDate || subtaskTotal || todo.recurrence || notStarted"
           class="mb-0 mt-1 flex flex-wrap items-center gap-2"
         >
           <span
@@ -344,6 +363,29 @@ function cancel(): void {
           >
             {{ formatDueDate(todo.dueDate) }}
             <span v-if="todo.reminderAt"> · 已设提醒</span>
+          </span>
+          <!--
+            Subtask progress: a read-only `n/m` badge, not a bar — a bar needs a
+            fixed width that fights the flex-wrap badge rhythm and crowds the
+            title on a narrow screen, while a badge with an icon and figures reads
+            at a glance and folds like the others. Neutral slate, never the
+            urgency reds: progress is a stable property of the task, not a
+            deadline; the two colour branches weigh the same and are written here,
+            not in a `.ts` table, so UnoCSS emits the `dark:` classes. Absent with
+            no steps (0/0 is not progress). Non-interactive: no focus, no Tab stop.
+          -->
+          <span
+            v-if="subtaskTotal"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium tabular-nums"
+            :class="
+              completed
+                ? 'text-slate-400 dark:text-slate-500'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            "
+          >
+            <ListChecks :size="14" aria-hidden="true" />
+            <span class="sr-only">子任务进度：</span>
+            {{ subtaskDone }}/{{ subtaskTotal }}
           </span>
           <!--
             Repeat pill: a `Repeat` icon is the one signal the date badges do not

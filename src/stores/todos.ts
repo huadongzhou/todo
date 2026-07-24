@@ -1,6 +1,6 @@
 import { computed, ref, toRaw } from "vue";
 import { defineStore } from "pinia";
-import type { RecurrenceRule, Todo } from "@/types/todo";
+import type { RecurrenceRule, Subtask, Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import type { PageAlert } from "@/lib/page-alert";
 import { daysSinceLocalDay, isOverdue, todayLocalDay } from "@/lib/dueDate";
@@ -71,6 +71,10 @@ type FieldChange = Pick<
   // Carried so a habit's check-in and make-up can write the set of scheduled
   // dates it has been checked in on; ordinary edits do not touch it.
   | "checkIns"
+  // Carried so the subtask editor can write the whole checklist as one array
+  // (its order is its display order); the scalar edit path in `update` leaves it
+  // untouched, since subtasks are edited through their own channel (`editSubtasks`).
+  | "subtasks"
 >;
 
 /**
@@ -189,6 +193,27 @@ function patchFromTodo(todo: Todo): TodoPatch {
     dependsOn: todo.dependsOn,
     checkIns: todo.checkIns,
   };
+}
+
+/**
+ * Whether two checklists carry the same steps, in the same order and state.
+ *
+ * The subtask editor hands the whole array back on every keystroke's worth of
+ * work, so this is what keeps "blur a title you did not change" from writing the
+ * identical list out — an empty outbound op and an undo entry that undoes nothing
+ * the user can see (the same guard `update` gets from comparing against storage).
+ */
+function sameSubtasks(a: readonly Subtask[], b: readonly Subtask[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((subtask, index) => {
+    const other = b[index];
+    return (
+      other !== undefined &&
+      subtask.id === other.id &&
+      subtask.title === other.title &&
+      subtask.done === other.done
+    );
+  });
 }
 
 /** What an edit would actually write, and what those fields held before it. */
@@ -625,6 +650,35 @@ export const useTodoStore = defineStore("todos", () => {
     if (Object.keys(plan.after).length === 0) return;
     if (!applyChange(id, plan.after)) return;
     recordHistory({ kind: "change", id, before: plan.before, after: plan.after });
+  }
+
+  /**
+   * Writes a whole new checklist onto one todo as a single undoable change.
+   *
+   * Every discrete thing the user does to the checklist — adding a step,
+   * renaming or ticking one, dropping one, reordering — is expressed the same
+   * way: the array as it should now be, handed here whole (its order is its
+   * display order). One path carries all of them through `applyChange` (memory,
+   * storage, and the outbound `subtasks` patch another device converges on) and
+   * files exactly one undo entry apiece, so a single Ctrl+Z takes back one
+   * subtask action rather than a burst of keystrokes. A list equal to the one
+   * already stored writes nothing — the caller's blur-to-commit path may hand
+   * back an unchanged title, and writing it would queue an empty op and an undo
+   * that undoes nothing. The `before` snapshot is copied raw so the reactive row
+   * cannot change it underneath the history entry, exactly as a deletion's is.
+   */
+  function editSubtasks(id: string, next: readonly Subtask[]): boolean {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo) return false;
+    if (sameSubtasks(todo.subtasks, next)) return false;
+
+    const before: FieldChange = {
+      subtasks: todo.subtasks.map((subtask) => ({ ...toRaw(subtask) })),
+    };
+    const after: FieldChange = { subtasks: next.map((subtask) => ({ ...subtask })) };
+    if (!applyChange(id, after)) return false;
+    recordHistory({ kind: "change", id, before, after });
+    return true;
   }
 
   function toggle(id: string) {
@@ -1238,6 +1292,7 @@ export const useTodoStore = defineStore("todos", () => {
     hydrate,
     add,
     update,
+    editSubtasks,
     toggle,
     makeUp,
     remove,
