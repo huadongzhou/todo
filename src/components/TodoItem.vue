@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Check, Copy, Flame, ListChecks, Repeat, SlidersHorizontal, Trash2 } from "lucide-vue-next";
+import {
+  Check,
+  Copy,
+  Flame,
+  ListChecks,
+  Lock,
+  Repeat,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-vue-next";
 import type { HabitProgress } from "@/bindings/commands";
 import Button from "@/components/ui/button/Button.vue";
 import SubtaskList from "@/components/SubtaskList.vue";
 import AttachmentList from "@/components/AttachmentList.vue";
+import DependencyList from "@/components/DependencyList.vue";
 import TodoFields, {
   createEmptyDraft,
   draftFromTodo,
@@ -69,6 +79,31 @@ const detailsOpen = ref(false);
 const completed = computed(() => props.todo.status === "completed");
 /** A task whose start date has not arrived yet: set, but nothing to do about. */
 const notStarted = computed(() => isNotStarted(props.todo.startDate, completed.value));
+
+/**
+ * This task's progress against its prerequisites — `{ done, total, locked }` —
+ * derived across the whole graph by the store (a prerequisite's completion state
+ * lives on another row, which this component never sees). `locked` is true while
+ * any prerequisite is still outstanding; the collapsed row shows a neutral
+ * "锁定" badge then and drops it the moment the last one is done (前置完成即解锁).
+ */
+const lock = computed(() => todoStore.dependencyLock(props.todo.id));
+
+/**
+ * The lock badge's accessible name: it carries the single prerequisite's title
+ * when there is exactly one (the visible badge only counts, so a long title does
+ * not stretch the row), and always states that the task will not remind until it
+ * unlocks — so the "· 已设提醒" note beside a due date is not read as "will fire".
+ */
+const lockLabel = computed(() => {
+  if (lock.value.total === 1) {
+    const prerequisite = props.todo.dependsOn[0];
+    const dep = todoStore.items.find((item) => item.id === prerequisite);
+    const title = dep ? dep.title : "已删除或未同步的任务";
+    return `依赖未完成：待“${title}”完成，解锁前不提醒`;
+  }
+  return `依赖未完成：还有 ${lock.value.total - lock.value.done} 项前置未完成，解锁前不提醒`;
+});
 
 /**
  * How many of the task's steps are done, shown on the collapsed row as `n/m`.
@@ -297,6 +332,16 @@ function cancel(): void {
       -->
       <AttachmentList :todo="todo" />
 
+      <!--
+        The dependency region, the fourth sibling of the field block after the
+        attachments rather than a field in it: choosing a prerequisite links to
+        another existing task, so it belongs to a task already in the graph and
+        must not appear in the create form. It commits its own edits straight to
+        the store, so it rides neither this form's Enter-to-save nor its
+        Esc-to-cancel.
+      -->
+      <DependencyList :todo="todo" />
+
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="m-0 text-xs text-slate-500 dark:text-slate-400">Enter 保存 · Esc 取消</p>
         <div class="flex gap-2">
@@ -363,7 +408,7 @@ function cancel(): void {
           scrolling the row sideways.
         -->
         <p
-          v-if="todo.dueDate || subtaskTotal || todo.recurrence || notStarted"
+          v-if="todo.dueDate || subtaskTotal || todo.recurrence || notStarted || lock.locked"
           class="mb-0 mt-1 flex flex-wrap items-center gap-2"
         >
           <span
@@ -443,6 +488,36 @@ function cancel(): void {
             <Flame :size="14" aria-hidden="true" />
             <span class="sr-only">连续记录：</span>
             {{ streakText }}
+          </span>
+          <!--
+            Lock pill: a task waiting on prerequisites, shown rather than hidden
+            (a hidden task carries no badge, and "解锁" here means "may act /
+            remind", not "appear — the same posture as the not-started badge). A
+            `Lock` icon marks it, the sr-only prefix and the count carry the
+            meaning so it never leans on the icon or colour, and neutral slate is
+            "waiting", never the urgency reds. With more than one prerequisite it
+            counts `前置 done/total`; with exactly one it reads "待前置完成", the
+            title living in the accessible name so a long one does not stretch the
+            row. Only present while locked, so it vanishes the moment the last
+            prerequisite is done. The two colour branches weigh the same and are
+            written here, not in a `.ts` table, so UnoCSS emits the `dark:`
+            classes (the `dueDate.ts` trap). Non-interactive: no focus, no Tab stop.
+          -->
+          <span
+            v-if="lock.locked"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium tabular-nums"
+            :class="
+              completed
+                ? 'text-slate-400 dark:text-slate-500'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            "
+            :title="lockLabel"
+          >
+            <Lock :size="14" aria-hidden="true" />
+            <span class="sr-only">{{ lockLabel }}</span>
+            <span aria-hidden="true">{{
+              lock.total > 1 ? `前置 ${lock.done}/${lock.total}` : "待前置完成"
+            }}</span>
           </span>
           <span
             v-if="notStarted"

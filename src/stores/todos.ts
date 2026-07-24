@@ -80,6 +80,10 @@ type FieldChange = Pick<
   // untouched, since attachments are edited through their own channel
   // (`editAttachments`).
   | "attachments"
+  // Carried so the dependency editor can write the whole prerequisite id list as
+  // one array; the scalar edit path in `update` leaves it untouched, since
+  // dependencies are edited through their own channel (`editDependsOn`).
+  | "dependsOn"
 >;
 
 /**
@@ -243,6 +247,46 @@ function sameAttachments(a: readonly Attachment[], b: readonly Attachment[]): bo
       (attachment.name ?? null) === (other.name ?? null)
     );
   });
+}
+
+/**
+ * Whether two prerequisite id lists carry the same ids, in the same order.
+ *
+ * The dependency editor hands the whole array back on every add or remove, so
+ * this keeps a no-op — adding then removing, or any path that rebuilds the
+ * identical list — from writing it out again: an empty outbound op and an undo
+ * entry that undoes nothing the user can see (the twin of `sameSubtasks` /
+ * `sameAttachments`).
+ */
+function sameDependsOn(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((id, index) => id === b[index]);
+}
+
+/**
+ * The transitive prerequisites of one task in a dependency graph — every id
+ * reachable from `start` by following `dependsOn` edges.
+ *
+ * The TypeScript twin of `todo_domain::dependency::transitive_prerequisites`,
+ * kept here so candidate culling and cycle rejection stay reactive off the
+ * in-memory list without a round-trip; the Rust reference is what `cargo test`
+ * holds honest. An id with no todo of its own (deleted or not yet synced) is a
+ * leaf with no further edges, so it is walked to but leads nowhere. `start`
+ * itself appears in the result only when a cycle leads back to it.
+ */
+function transitivePrerequisites(
+  dependsOnOf: (id: string) => readonly string[],
+  start: string,
+): Set<string> {
+  const seen = new Set<string>();
+  const stack = [...dependsOnOf(start)];
+  while (stack.length > 0) {
+    const id = stack.pop() as string;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...dependsOnOf(id));
+  }
+  return seen;
 }
 
 /** What an edit would actually write, and what those fields held before it. */
@@ -480,13 +524,126 @@ export const useTodoStore = defineStore("todos", () => {
    * One rule for every write: a completed todo holds no reminder. Completing one
    * used to cancel it while editing one re-armed it, so editing a task that was
    * already done put its reminder back on the clock.
+   *
+   * A locked todo holds none either: while a prerequisite is still outstanding
+   * the task is not yet actionable, so its reminder is suppressed (任务管理/12,
+   * 规格 d). Unlocking re-arms it through the same path — `scheduleReminder`
+   * fires a past-due instant at once, so a reminder whose moment slipped by
+   * while the task waited catches up the moment it unlocks.
    */
   function refreshReminder(todo: Todo): void {
-    if (todo.status === "completed") {
+    if (todo.status === "completed" || isLocked(todo)) {
       cancelReminder(todo.id);
       return;
     }
     void scheduleReminder(todo);
+  }
+
+  /** One task's prerequisite ids, or an empty list when the id is unresolvable. */
+  function currentDependsOn(id: string): readonly string[] {
+    return items.value.find((item) => item.id === id)?.dependsOn ?? [];
+  }
+
+  /**
+   * A task's progress against its prerequisites: how many are satisfied, how many
+   * there are, and whether it is still locked. The view-side twin of
+   * `todo_domain::dependency::dependency_lock` (cargo-tested reference).
+   *
+   * A prerequisite is satisfied when it is completed, or when it cannot be
+   * resolved on this device at all — a task deleted or not yet synced here — which
+   * counts as satisfied rather than blocking (编排者裁决 2026-07-24): a task
+   * waiting on something this device will never see complete would otherwise be
+   * locked forever, whereas counting it satisfied only ever unlocks early.
+   */
+  function lockState(todo: Todo): { done: number; total: number; locked: boolean } {
+    const total = todo.dependsOn.length;
+    let done = 0;
+    for (const depId of todo.dependsOn) {
+      const dep = items.value.find((item) => item.id === depId);
+      if (!dep || dep.status === "completed") done += 1;
+    }
+    return { done, total, locked: done < total };
+  }
+
+  /** Whether any prerequisite is still outstanding — used to gate its reminder. */
+  function isLocked(todo: Todo): boolean {
+    return lockState(todo).locked;
+  }
+
+  /**
+   * A task's lock state by id, for the collapsed row's badge. Returns the open
+   * state for an unknown id so a row mid-removal reads as simply unlocked.
+   */
+  function dependencyLock(id: string): { done: number; total: number; locked: boolean } {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo) return { done: 0, total: 0, locked: false };
+    return lockState(todo);
+  }
+
+  /**
+   * Would making `id` depend on `prerequisiteId` introduce a cycle? The view-side
+   * twin of `todo_domain::dependency::introduces_cycle`, used to pre-cull the
+   * candidate list (and to catch the rare race at add time): true for a
+   * self-dependency, or when `prerequisiteId` already reaches `id` through the
+   * graph so the new edge would close a loop.
+   */
+  function wouldCreateDependencyCycle(id: string, prerequisiteId: string): boolean {
+    if (id === prerequisiteId) return true;
+    return transitivePrerequisites(currentDependsOn, prerequisiteId).has(id);
+  }
+
+  /**
+   * Whether replacing `id`'s prerequisites with `next` would close a cycle
+   * through `id`. Removals never cycle, so only additions can trip this; the
+   * whole resulting graph is walked (with `id`'s edges overridden) so a batch of
+   * additions or a race is caught, not just one edge at a time.
+   */
+  function editWouldCycle(id: string, next: readonly string[]): boolean {
+    const reader = (nodeId: string): readonly string[] =>
+      nodeId === id ? next : currentDependsOn(nodeId);
+    return transitivePrerequisites(reader, id).has(id);
+  }
+
+  /**
+   * Re-evaluates the reminder of every task that lists `id` as a prerequisite.
+   *
+   * Completing, deleting or restoring a task flips whether its dependents are
+   * locked, and a locked task holds no reminder — so the moment a prerequisite is
+   * done (or gone), its dependents re-arm, and the moment one comes back open,
+   * they stand down. The dependent's own edits already run through
+   * `refreshReminder`; this is the other half, the cross-graph one.
+   */
+  function refreshDependents(id: string): void {
+    for (const todo of items.value) {
+      if (todo.dependsOn.includes(id)) refreshReminder(todo);
+    }
+  }
+
+  /**
+   * Writes a whole new prerequisite list onto one todo as a single undoable
+   * change — the twin of `editSubtasks` / `editAttachments` for dependencies.
+   *
+   * Adding or removing a prerequisite is expressed the same way: the id array as
+   * it should now be, handed here whole. A list equal to the stored one writes
+   * nothing (the `sameDependsOn` guard). A set that would close a cycle is
+   * refused (`false`) rather than stored: the editor pre-culls cyclic candidates,
+   * but a race — the other end just added the reverse edge — could still hand one
+   * in, and a cycle the database accepts would lock two tasks against each other
+   * for good. One path carries the change through `applyChange` (memory, storage,
+   * the reminder gate, and the outbound `dependsOn` patch another device
+   * converges on) and files exactly one undo entry.
+   */
+  function editDependsOn(id: string, next: readonly string[]): boolean {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo) return false;
+    if (sameDependsOn(todo.dependsOn, next)) return false;
+    if (editWouldCycle(id, next)) return false;
+
+    const before: FieldChange = { dependsOn: [...todo.dependsOn] };
+    const after: FieldChange = { dependsOn: [...next] };
+    if (!applyChange(id, after)) return false;
+    recordHistory({ kind: "change", id, before, after });
+    return true;
   }
 
   /**
@@ -513,6 +670,10 @@ export const useTodoStore = defineStore("todos", () => {
     Object.assign(todo, change);
     persist(todo);
     refreshReminder(todo);
+    // Completing or re-opening this task flips whether its dependents are locked,
+    // so their reminders are re-evaluated. Gated on `status` because that is the
+    // only field that changes whether this task satisfies another's prerequisite.
+    if (change.status !== undefined) refreshDependents(id);
     void recordOperation(buildUpsertOperation(id, change, new Date().toISOString()));
     return true;
   }
@@ -529,6 +690,9 @@ export const useTodoStore = defineStore("todos", () => {
     items.value.splice(index, 1);
     forget(id);
     cancelReminder(id);
+    // A deleted prerequisite is unresolvable, which counts as satisfied, so a
+    // task that was waiting only on this one unlocks and re-arms its reminder.
+    refreshDependents(id);
     void recordOperation(buildDeleteOperation(id, new Date().toISOString()));
     return { todo: snapshot, index };
   }
@@ -541,6 +705,9 @@ export const useTodoStore = defineStore("todos", () => {
     items.value.splice(Math.min(Math.max(index, 0), items.value.length), 0, restored);
     persist(restored);
     refreshReminder(restored);
+    // Restoring an open prerequisite re-locks the tasks that were waiting on it
+    // (a delete had unlocked them), so their reminders stand down again.
+    refreshDependents(restored.id);
     // Every field travels: on the other devices this todo is gone, so the
     // operation has to be able to build it again from nothing.
     void recordOperation(
@@ -1330,7 +1497,9 @@ export const useTodoStore = defineStore("todos", () => {
     cancelAllReminders();
     let scheduled = 0;
     for (const todo of items.value) {
-      if (todo.status === "open" && todo.reminderAt) {
+      // A locked task holds no reminder until its prerequisites are done, the
+      // same gate `refreshReminder` applies on every later write.
+      if (todo.status === "open" && todo.reminderAt && !isLocked(todo)) {
         if (await scheduleReminder(todo)) scheduled += 1;
       }
     }
@@ -1350,6 +1519,9 @@ export const useTodoStore = defineStore("todos", () => {
     update,
     editSubtasks,
     editAttachments,
+    editDependsOn,
+    dependencyLock,
+    wouldCreateDependencyCycle,
     toggle,
     makeUp,
     remove,
