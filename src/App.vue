@@ -276,6 +276,28 @@ const quietWindowDescription = computed(() => {
   return quietSilentNow.value ? `${base} 当前正处于静默中，提醒将在 ${end} 后补推。` : base;
 });
 
+/**
+ * The one human-readable line under the morning-summary time input. It names the
+ * push time, and — when that time falls inside an active quiet window — warns
+ * that the summary is held to the window's end, so the "受勿扰门控 + 顺延" the
+ * scheduler applies is visible to the user rather than a surprise. Purely derived
+ * from the configured times (the summary time against the window), so it needs no
+ * clock tick, unlike `quietSilentNow` which reads "now".
+ */
+const morningSummaryDescription = computed(() => {
+  const time = settingsStore.morningSummaryTime;
+  const base = `每天 ${time} 推送今日概览。`;
+  if (!settingsStore.quietHoursEnabled) return base;
+  const start = quietMinutes(settingsStore.quietHoursStart);
+  const end = quietMinutes(settingsStore.quietHoursEnd);
+  const at = quietMinutes(time);
+  if (start === null || end === null || at === null || start === end) return base;
+  const inWindow = start > end ? at >= start || at < end : at >= start && at < end;
+  return inWindow
+    ? `${base} 该时间在勿扰时段内，摘要将在勿扰结束（${settingsStore.quietHoursEnd}）后推送。`
+    : base;
+});
+
 // The status line's clock only needs to tick while the panel that shows it is
 // open; opening it also reseeds the minute so the line is right at once.
 watch(settingsOpen, (open) => {
@@ -655,6 +677,54 @@ async function duplicateTodo(id: string): Promise<void> {
             class="mb-0 px-3 text-xs text-slate-500 dark:text-slate-400"
           >
             {{ quietWindowDescription }}
+          </p>
+        </template>
+        <!--
+          Morning summary sits after quiet hours, the third "when does a
+          notification go out" row: a daily digest of today's due and overdue
+          counts. Off by default (a new every-morning notification is an unasked-
+          for interruption), the time input opens only once the switch is on. No
+          isDesktop gate, same as the group's other rows.
+        -->
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.morningSummaryEnabled"
+            @change="
+              settingsStore.setMorningSummaryEnabled(($event.target as HTMLInputElement).checked)
+            "
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100"
+              >晨间摘要</span
+            >
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >开启后，每天早晨推送一条今日概览通知：今日到期与逾期的任务数量。</span
+            >
+          </span>
+        </label>
+        <template v-if="settingsStore.morningSummaryEnabled">
+          <div class="mb-2 px-3">
+            <label
+              for="morning-summary-time"
+              class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400"
+              >推送时间</label
+            >
+            <input
+              id="morning-summary-time"
+              type="time"
+              :value="settingsStore.morningSummaryTime"
+              aria-describedby="morning-summary-desc"
+              class="min-h-11 w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-base focus:ring-2 focus:ring-sky-500 sm:text-sm dark:bg-slate-900"
+              @change="
+                settingsStore.setMorningSummaryTime(($event.target as HTMLInputElement).value)
+              "
+            />
+          </div>
+          <p id="morning-summary-desc" class="mb-0 px-3 text-xs text-slate-500 dark:text-slate-400">
+            {{ morningSummaryDescription }}
           </p>
         </template>
         <p class="mb-3 px-3 text-xs text-slate-500 dark:text-slate-400">

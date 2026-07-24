@@ -19,6 +19,7 @@
 
 use tauri_plugin_store::StoreExt;
 use todo_domain::quiet::QuietWindow;
+use todo_domain::summary::MorningSummaryPrefs;
 
 /// The settings-store file the view layer persists preferences to.
 const SETTINGS_FILE: &str = "settings.json";
@@ -94,4 +95,22 @@ pub fn quiet_hours_window(app: &tauri::AppHandle) -> Option<QuietWindow> {
     let start = read_string(app, "reminder.quiet.start", "22:00");
     let end = read_string(app, "reminder.quiet.end", "08:00");
     QuietWindow::parse(&start, &end)
+}
+
+/// The morning-summary preference (提醒通知/06): whether the daily digest is on,
+/// and the `"HH:mm"` local time it pushes at.
+///
+/// Off by default, matching the view layer's `reminder.summary.enabled` default:
+/// a summary is a new every-morning system notification, an unasked-for
+/// interruption like the renag, so it stays off until the user turns it on. The
+/// time defaults to `"09:00"` — the value the settings store seeds and the same
+/// hour the "明天" snooze resolves to, so the two do not drift — and is handed on
+/// raw for the domain to parse, so the one strict `"HH:mm"` reader there covers
+/// it too. When the switch is off the scheduler never builds a summary, so a
+/// reminder is delivered exactly as it is today.
+pub fn morning_summary_prefs(app: &tauri::AppHandle) -> MorningSummaryPrefs {
+    MorningSummaryPrefs {
+        enabled: read_bool(app, "reminder.summary.enabled", false),
+        time: read_string(app, "reminder.summary.time", "09:00"),
+    }
 }

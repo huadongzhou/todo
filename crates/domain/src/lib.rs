@@ -8,6 +8,7 @@ pub mod quiet;
 pub mod recurrence;
 pub mod reminder;
 pub mod renag;
+pub mod summary;
 
 pub use todo_contracts::SyncCursor;
 

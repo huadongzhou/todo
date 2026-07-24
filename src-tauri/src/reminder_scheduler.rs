@@ -26,6 +26,7 @@ use todo_domain::ics::instant_unix_seconds;
 use todo_domain::quiet::plan_quiet_delivery;
 use todo_domain::reminder::{due_reminders, DueReminder};
 use todo_domain::renag::{due_renags, renag_occurrence_unix, RenagDue};
+use todo_domain::summary::due_morning_summary;
 
 use crate::reminder_prefs;
 use crate::todo_db::TodoDb;
@@ -165,6 +166,36 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
         show(app, &title, &body, "quiet-hours summary");
         for &index in &plan.summarize {
             record(&db, &items[index]);
+        }
+    }
+
+    // 提醒通知/06 morning summary: a separate daily toast — today's due and overdue
+    // counts — read fresh each poll, so a restart or an edit is reflected at once.
+    // It rides the same `reminder_deliveries` table with a `summary:<date>` key,
+    // one per local day, so it is raised once a day and a restart does not repeat
+    // it. Built only when the switch is on; off, the poll never touches it.
+    if let Some(summary) = due_morning_summary(
+        &todos,
+        &delivered,
+        &reminder_prefs::morning_summary_prefs(app),
+        now_unix,
+        ZONE_OFFSET_SECONDS,
+    ) {
+        // Ride the same quiet gate the reminders do, but on its own one-item plan:
+        // inside the window nothing goes out and nothing is recorded (a later poll
+        // re-derives it from fresh counts, so a summary held through the night
+        // reflects the flush moment); outside it the summary is raised on its own.
+        // A one-item plan can never summarise, so the morning summary is never
+        // folded into the quiet-hours re-push — the two stay two notifications
+        // (提醒通知/06 §4).
+        let plan = plan_quiet_delivery(&[summary.scheduled_unix], window, now_unix, ZONE_OFFSET_SECONDS);
+        if !plan.deliver.is_empty() {
+            show(app, &summary.title, &summary.body, "morning summary");
+            if let Err(error) =
+                db.record_reminder_delivery(&summary.todo_id, &summary.reminder_at)
+            {
+                log::warn!("Morning summary delivery could not be recorded: {error}");
+            }
         }
     }
 }

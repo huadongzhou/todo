@@ -181,7 +181,10 @@ pub fn plan_quiet_delivery(
 /// minutes 0–59. A settings file edited by hand into `"9:00"` or `"24:00"` reads
 /// as `None`, which the caller turns into a fail-open (no window) rather than a
 /// wrong window.
-fn parse_hm(value: &str) -> Option<i64> {
+///
+/// Shared with 晨间摘要 (提醒通知/06), whose push time is the same strict `"HH:mm"`:
+/// one reader here keeps the two from parsing the shape two different ways.
+pub(crate) fn parse_hm(value: &str) -> Option<i64> {
     let bytes = value.as_bytes();
     if bytes.len() != 5 || bytes[2] != b':' {
         return None;

@@ -64,6 +64,21 @@ export const useSettingsStore = defineStore("settings", () => {
    */
   const quietHoursStart = ref("22:00");
   const quietHoursEnd = ref("08:00");
+  /**
+   * Whether the daily morning summary is on. Off by default: it is a new
+   * every-morning system notification — an unasked-for interruption like the
+   * renag — so the user opts in. Read natively by the reminder scheduler
+   * (`reminder_prefs.rs`), which builds the summary while the app is only in the
+   * tray, through the same `settings.json` these keys are written to.
+   */
+  const morningSummaryEnabled = ref(false);
+  /**
+   * The morning summary's push time, as an `"HH:mm"` local time. Stored even
+   * while the switch is off (so turning it on shows 09:00 rather than a blank),
+   * and read back the same by the scheduler. 09:00 is the shared "早晨" anchor —
+   * the same hour the "明天" snooze resolves to — so the two do not drift.
+   */
+  const morningSummaryTime = ref("09:00");
   const isReady = ref(false);
   const persistenceError = ref<string | null>(null);
   let unsubscribeSystemTheme: (() => void) | undefined;
@@ -96,6 +111,8 @@ export const useSettingsStore = defineStore("settings", () => {
       quietHoursEnabled.value = await loadBooleanPreference("reminder.quiet.enabled", false);
       quietHoursStart.value = await loadStringPreference("reminder.quiet.start", "22:00");
       quietHoursEnd.value = await loadStringPreference("reminder.quiet.end", "08:00");
+      morningSummaryEnabled.value = await loadBooleanPreference("reminder.summary.enabled", false);
+      morningSummaryTime.value = await loadStringPreference("reminder.summary.time", "09:00");
       await applyTheme(theme.value);
       watchSystemTheme();
       writeDiagnostic("info", "Settings restored", {
@@ -111,6 +128,8 @@ export const useSettingsStore = defineStore("settings", () => {
         quietHoursEnabled: quietHoursEnabled.value,
         quietHoursStart: quietHoursStart.value,
         quietHoursEnd: quietHoursEnd.value,
+        morningSummaryEnabled: morningSummaryEnabled.value,
+        morningSummaryTime: morningSummaryTime.value,
       });
     } catch {
       theme.value = "system";
@@ -125,6 +144,8 @@ export const useSettingsStore = defineStore("settings", () => {
       quietHoursEnabled.value = false;
       quietHoursStart.value = "22:00";
       quietHoursEnd.value = "08:00";
+      morningSummaryEnabled.value = false;
+      morningSummaryTime.value = "09:00";
       persistenceError.value = "设置恢复失败，已使用系统默认值。";
       // The fallback itself must never throw: `main.ts` awaits `bootstrap()`
       // before mounting, so a second failure here would take the whole UI down
@@ -299,6 +320,38 @@ export const useSettingsStore = defineStore("settings", () => {
     await persistQuietPreference("reminder.quiet.end", value);
   }
 
+  async function setMorningSummaryEnabled(enabled: boolean): Promise<void> {
+    morningSummaryEnabled.value = enabled;
+    persistenceError.value = null;
+
+    try {
+      await saveBooleanPreference("reminder.summary.enabled", enabled);
+      writeDiagnostic("info", "Morning-summary preference updated", {
+        morningSummaryEnabled: enabled,
+      });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Morning-summary preference could not be persisted", {
+        morningSummaryEnabled: enabled,
+      });
+    }
+  }
+
+  async function setMorningSummaryTime(value: string): Promise<void> {
+    morningSummaryTime.value = value;
+    persistenceError.value = null;
+
+    try {
+      await saveStringPreference("reminder.summary.time", value);
+      writeDiagnostic("info", "Morning-summary time updated", { morningSummaryTime: value });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Morning-summary time could not be persisted", {
+        morningSummaryTime: value,
+      });
+    }
+  }
+
   return {
     theme,
     themeLabel,
@@ -313,6 +366,8 @@ export const useSettingsStore = defineStore("settings", () => {
     quietHoursEnabled,
     quietHoursStart,
     quietHoursEnd,
+    morningSummaryEnabled,
+    morningSummaryTime,
     isDesktop,
     isReady,
     persistenceError,
@@ -329,5 +384,7 @@ export const useSettingsStore = defineStore("settings", () => {
     setQuietHoursEnabled,
     setQuietHoursStart,
     setQuietHoursEnd,
+    setMorningSummaryEnabled,
+    setMorningSummaryTime,
   };
 });
