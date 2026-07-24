@@ -265,4 +265,88 @@ mod tests {
         assert_eq!(ids(&unlocked), vec!["a"]);
         assert!(unlocked[0].overdue);
     }
+
+    #[test]
+    fn consecutive_recurring_instances_each_raise_their_own_reminder() {
+        // The core of 周期提醒: a repeat fires on every instance, across a day
+        // boundary. The scheduler knows nothing about repeat rules — the store
+        // generates the next instance (任务管理/08 `buildNextInstance`) as a fresh
+        // row with a new id and every date shifted onto the next occurrence — so all
+        // that has to hold here is that each instance's own `(todo_id, reminder_at)`
+        // is a delivery key of its own. The instants are written the way the store
+        // writes them (`shiftInstant` → `toISOString`, with the `.000Z` fraction),
+        // so this also pins that `instant_unix_seconds` reads that exact shape.
+        let first_at = "2026-07-24T09:00:00.000Z";
+        let instance_one = reminded("instance-1", first_at);
+
+        // Instance one comes due at nine and is raised; the app records it.
+        assert_eq!(
+            ids(&due_reminders(&[instance_one.clone()], &no_deliveries(), NINE_AM, GRACE)),
+            vec!["instance-1"]
+        );
+
+        // Completing it files the row done and drops a fresh instance in its place —
+        // new id, reminder a day on (`buildNextInstance` shifts every date by the
+        // days the due date moved). A day later that successor is due; the completed
+        // predecessor, already delivered and now off the open list, raises nothing.
+        let mut predecessor = instance_one;
+        predecessor.status = TodoStatus::Completed;
+        predecessor.completed_at = Some("2026-07-24T09:03:00Z".to_owned());
+        let successor = reminded("instance-2", "2026-07-25T09:00:00.000Z");
+        let delivered: HashSet<(String, String)> =
+            [("instance-1".to_owned(), first_at.to_owned())]
+                .into_iter()
+                .collect();
+
+        let next_day =
+            due_reminders(&[predecessor, successor], &delivered, NINE_AM + 86_400, GRACE);
+        assert_eq!(ids(&next_day), vec!["instance-2"]);
+        // On its own day the successor is on time, not a missed catch-up.
+        assert!(!next_day[0].overdue);
+    }
+
+    #[test]
+    fn a_recurring_row_advanced_in_place_re_arms_its_reminder_for_the_next_occurrence() {
+        // The other generation path (任务管理/09 habit check-in, and the overdue
+        // catch-up `advanceOverdueRecurring`): the row keeps its id and its date
+        // moves to the next occurrence, the reminder moving with it. So the same id
+        // carries a new `reminder_at` — a delivery key the previous occurrence's does
+        // not cover, which is why a habit reminds on every occurrence rather than
+        // only the first.
+        let habit_id = "habit";
+        let first_at = "2026-07-24T09:00:00.000Z";
+        let next_at = "2026-07-25T09:00:00.000Z";
+
+        // The first occurrence is raised and recorded.
+        assert_eq!(
+            ids(&due_reminders(&[reminded(habit_id, first_at)], &no_deliveries(), NINE_AM, GRACE)),
+            vec![habit_id]
+        );
+        let after_first: HashSet<(String, String)> =
+            [(habit_id.to_owned(), first_at.to_owned())].into_iter().collect();
+
+        // Checked in for the day, the row advances in place to the next day at the
+        // same wall-clock time. The old key is spent, but the new day's key is not,
+        // so the next occurrence is raised rather than swallowed as a repeat.
+        let next_day =
+            due_reminders(&[reminded(habit_id, next_at)], &after_first, NINE_AM + 86_400, GRACE);
+        assert_eq!(ids(&next_day), vec![habit_id]);
+
+        // Once that occurrence is itself recorded it does not fire twice — the same
+        // guard that stops any single instant repeating, so each occurrence raises
+        // exactly one reminder.
+        let after_second: HashSet<(String, String)> = [
+            (habit_id.to_owned(), first_at.to_owned()),
+            (habit_id.to_owned(), next_at.to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        assert!(due_reminders(
+            &[reminded(habit_id, next_at)],
+            &after_second,
+            NINE_AM + 86_400,
+            GRACE
+        )
+        .is_empty());
+    }
 }

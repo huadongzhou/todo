@@ -52,7 +52,7 @@
 │   │   └── ✅ 通知权限静默请求，拒绝后优雅降级
 │   ├── 2.2 后台与周期调度
 │   │   ├── ✅ 后台调度：应用未运行时提醒不丢（Rust 侧调度）（提醒时序下沉 Rust：`reminder_scheduler.rs` 后台线程每 30s 轮询本地 SQLite，纯规则 `todo_domain::reminder::due_reminders` 判定到点/逾期，并从数据重导 gating——完成·归档·依赖锁定（`dependency_lock`）不排；`reminder_deliveries` 表按 (todo_id, reminder_at) 记已发，防同进程重发、重启后据此重建调度表不遗漏；逾期（超 60s 宽限）以「【逾期】」标题标注补发，通知走既有 `tauri-plugin-notification` 的 Rust 端直发，不经 webview capability，故 capability 无需新增；前端 `src/lib/notifications.ts` 的 `scheduleReminder`/`cancel*` 降级为惰性——Tauri 桌面走 Rust、浏览器 dev/移动端本就无后台调度，杜绝两套并行重复发；`instant_unix_seconds` 复用 ics 的 instant 解析，与日历导出同一读法；`cargo test` 覆盖判定/标注/投递持久化，驻托盘触发与重启补发属真实桌面运行时验证边界。移动端本地通知仍归 2.3）
-│   │   └── ⏳ 周期提醒：随重复规则持续触发
+│   │   └── ✅ 周期提醒：随重复规则持续触发（由 2.2 的轮询架构天然满足，本任务只验证不新增运行时代码）：周期实例（任务管理/08 `buildNextInstance` 换新 id、任务管理/09 打卡与 `advanceOverdueRecurring` 原地推进）都把 `reminder_at` 经 `shiftInstant`（`toISOString`，`.000Z`）位移到下一次发生，于是每个实例落一个新的 `(todo_id, reminder_at)` 投递键——下一轮 `due_reminders` 现算即发新实例、旧键已投递不重发，连续两次实例（含跨日）各提醒一次；`crates/domain/src/reminder.rs` 新增 2 项单测锁定该链（新 id 路径 + 同 id 原地推进路径，均用 `.000Z` 格式跨层验 `instant_unix_seconds` 读法）。「入站同步重排提醒」（编排者并入项：远端完成前置/改提醒时间/周期推进）同样由轮询满足——`applyRemoteUpsert`/`applyRemoteDelete` 落 SQLite 后下一轮（≤30s）重导 gating，无需重启或本地再操作；对应判定已由既有单测 `a_locked_task_holds_its_reminder_until_the_prerequisite_is_done`（完成前置→解锁重排）、`a_reminder_edited_to_a_new_time_is_raised_again`（改提醒时间→再发）与本次周期单测覆盖。轮询 30s 延迟对任务级提醒可接受（60s 逾期宽限已把窗口内到点归为准点），未改
 │   ├── 2.3 移动端提醒
 │   │   └── ⏳ 移动端本地通知（iOS / Android）
 │   ├── 2.4 通知交互
