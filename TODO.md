@@ -51,7 +51,7 @@
 │   │   ├── ✅ 到点系统通知（桌面，应用运行期）
 │   │   └── ✅ 通知权限静默请求，拒绝后优雅降级
 │   ├── 2.2 后台与周期调度
-│   │   ├── ⏳ 后台调度：应用未运行时提醒不丢（Rust 侧调度）
+│   │   ├── ✅ 后台调度：应用未运行时提醒不丢（Rust 侧调度）（提醒时序下沉 Rust：`reminder_scheduler.rs` 后台线程每 30s 轮询本地 SQLite，纯规则 `todo_domain::reminder::due_reminders` 判定到点/逾期，并从数据重导 gating——完成·归档·依赖锁定（`dependency_lock`）不排；`reminder_deliveries` 表按 (todo_id, reminder_at) 记已发，防同进程重发、重启后据此重建调度表不遗漏；逾期（超 60s 宽限）以「【逾期】」标题标注补发，通知走既有 `tauri-plugin-notification` 的 Rust 端直发，不经 webview capability，故 capability 无需新增；前端 `src/lib/notifications.ts` 的 `scheduleReminder`/`cancel*` 降级为惰性——Tauri 桌面走 Rust、浏览器 dev/移动端本就无后台调度，杜绝两套并行重复发；`instant_unix_seconds` 复用 ics 的 instant 解析，与日历导出同一读法；`cargo test` 覆盖判定/标注/投递持久化，驻托盘触发与重启补发属真实桌面运行时验证边界。移动端本地通知仍归 2.3）
 │   │   └── ⏳ 周期提醒：随重复规则持续触发
 │   ├── 2.3 移动端提醒
 │   │   └── ⏳ 移动端本地通知（iOS / Android）

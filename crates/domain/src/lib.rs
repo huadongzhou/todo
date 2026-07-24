@@ -5,6 +5,7 @@ pub mod holidays;
 pub mod ics;
 mod lunar;
 pub mod recurrence;
+pub mod reminder;
 
 pub use todo_contracts::SyncCursor;
 

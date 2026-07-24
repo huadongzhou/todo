@@ -428,6 +428,19 @@ fn parse_instant(value: &str) -> Option<ZonedInstant> {
     })
 }
 
+/// Reads an ISO 8601 instant as seconds since the Unix epoch, or `None` for a
+/// value no writer in this repository produces.
+///
+/// The reminder scheduler (`crate::reminder`) has to decide whether a stored
+/// `reminder_at` has arrived, which is the same question of "what instant is
+/// this" the calendar export answers — so it reads the value through this one
+/// parser rather than keeping a second that could drift from it. Only the instant
+/// is handed back: which zone the value named is a calendar-export concern (see
+/// [`ZonedInstant`]), not a "has it arrived yet" one.
+pub(crate) fn instant_unix_seconds(value: &str) -> Option<i64> {
+    parse_instant(value).map(|instant| instant.unix_seconds)
+}
+
 /// Reads the zone designator that closes an instant, in seconds east of UTC.
 ///
 /// The outer `Option` is "is this a value at all"; the inner one is "did it name

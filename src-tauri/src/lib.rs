@@ -1,4 +1,9 @@
 mod todo_db;
+// Desktop only: the native reminder scheduler is a background thread, which a
+// mobile process the OS suspends cannot rely on — mobile local notifications are
+// their own scheduling work (TODO.md 2.3), which will plug in here.
+#[cfg(desktop)]
+mod reminder_scheduler;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -508,8 +513,17 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // The database is managed before the scheduler starts, so the first
+            // poll always finds it; the scheduler reads todos and reminders
+            // through this one managed store, the same the IPC commands write.
             app.manage(setup_todo_db(app.handle()));
             setup_tray(app.handle());
+            // Reminder timing lives natively now (see `reminder_scheduler`), so a
+            // reminder fires while the app is only in the tray and a reminder
+            // missed while it was closed is re-raised on the next launch — neither
+            // of which the webview's `setTimeout` could do.
+            #[cfg(desktop)]
+            reminder_scheduler::spawn(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

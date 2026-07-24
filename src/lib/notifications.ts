@@ -18,14 +18,24 @@ let permissionState: "unknown" | "granted" | "denied" = "unknown";
 /**
  * Desktop reminder platform layer.
  *
- * The Tauri notification plugin's JS API lets us send an immediate toast but
- * does not expose a front-end scheduler. So the frontend owns timing: on every
- * reminder change it computes the delay to `reminderAt` and uses `setTimeout`
- * to fire the toast when the app is running. Past-due reminders fire
- * immediately on the next launch.
+ * Reminder *timing* now lives natively. On Tauri desktop a background Rust
+ * scheduler (`src-tauri/src/reminder_scheduler.rs`) polls the local database and
+ * raises each reminder at its moment, so a reminder fires even while the app is
+ * only in the tray, and a reminder missed while the app was closed is re-raised —
+ * marked overdue — on the next launch. The webview could do neither: its
+ * `setTimeout` only runs while the window is alive.
  *
- * Native background scheduling (the Rust `NotificationBuilder::schedule` API)
- * can be layered on later without changing this module's surface.
+ * So the scheduling entry points below are deliberately inert. The store still
+ * calls them on every reminder change (create, edit, complete, lock / unlock,
+ * startup) to state the intent in one platform-agnostic place; the native
+ * scheduler realises it by reading the same rows the store just wrote and
+ * re-deriving what is due — a completed, archived or prerequisite-locked task
+ * raises nothing — rather than being told. Running them in the webview too would
+ * raise every reminder twice.
+ *
+ * Other runtimes have no native scheduler and so no background reminders: browser
+ * development never had them (there is no OS toast to raise), and mobile local
+ * notifications are their own platform work (TODO.md 2.3). Both stay a no-op here.
  */
 
 async function ensurePermission(): Promise<boolean> {
@@ -55,27 +65,13 @@ async function ensurePermission(): Promise<boolean> {
   }
 }
 
-const MAX_DELAY_MS = 2 ** 31 - 1; // ~24.8 days, the setTimeout ceiling.
-const timers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function dueBody(reminder: Reminder): string {
-  if (!reminder.dueDate) return "提醒时间到了";
-  return `截止日：${reminder.dueDate}`;
-}
-
-function clearTimer(id: string): void {
-  const existing = timers.get(id);
-  if (existing !== undefined) {
-    clearTimeout(existing);
-    timers.delete(id);
-  }
-}
-
 /**
  * Sends an immediate notification (used for ad-hoc messages / tests).
  *
  * Permission is requested silently on first use; if denied the call is a
- * no-op and a warning is logged, never a thrown error.
+ * no-op and a warning is logged, never a thrown error. This is the one-off toast
+ * path, unrelated to reminder scheduling (which is native — see the module
+ * comment).
  */
 export async function notify(title: string, body?: string): Promise<void> {
   if (!isTauri()) return;
@@ -89,75 +85,21 @@ export async function notify(title: string, body?: string): Promise<void> {
 }
 
 /**
- * Schedules a reminder to fire at its `reminderAt` instant.
- *
- * Implements the product rule: a due date without an explicit reminder time
- * does not fire an active toast. Returns `true` if a toast was scheduled or
- * fired immediately (past-due); `false` if there is nothing to schedule.
+ * The store's platform-agnostic "arm this reminder" call. Inert by design: the
+ * native scheduler owns timing on desktop and re-derives what to raise from the
+ * stored rows, so nothing is armed in the webview (which would raise it twice).
+ * Returns `false` — this layer scheduled nothing. See the module comment.
  */
-export async function scheduleReminder(reminder: Reminder): Promise<boolean> {
-  if (!isTauri()) return false;
-  clearTimer(reminder.id);
-
-  if (!reminder.reminderAt) return false;
-
-  const fireAt = new Date(reminder.reminderAt);
-  if (Number.isNaN(fireAt.getTime())) {
-    writeDiagnostic("warn", "Invalid reminderAt; skipping reminder", {
-      id: reminder.id,
-      reminderAt: reminder.reminderAt,
-    });
-    return false;
-  }
-
-  try {
-    if (!(await ensurePermission())) return false;
-  } catch {
-    return false;
-  }
-
-  const delay = fireAt.getTime() - Date.now();
-
-  if (delay <= 0) {
-    // Past-due: fire once on launch so late reminders are not silently lost.
-    fire(reminder);
-    return true;
-  }
-
-  const clampedDelay = Math.min(delay, MAX_DELAY_MS);
-  const timer = setTimeout(() => {
-    timers.delete(reminder.id);
-    fire(reminder);
-  }, clampedDelay);
-  timers.set(reminder.id, timer);
-
-  if (clampedDelay < delay) {
-    writeDiagnostic("warn", "Reminder delay clamped to setTimeout ceiling", {
-      id: reminder.id,
-      reminderAt: reminder.reminderAt,
-    });
-  }
-  return true;
+export function scheduleReminder(_reminder: Reminder): Promise<boolean> {
+  return Promise.resolve(false);
 }
 
-/** Cancels any pending reminder for the given id. */
-export function cancelReminder(id: string): void {
-  clearTimer(id);
-}
+/**
+ * The store's "stand this reminder down" call. Inert: the native scheduler reads
+ * cancellation from the stored rows (a completed, deleted or re-locked task raises
+ * nothing), so there is no webview timer to clear.
+ */
+export function cancelReminder(_id: string): void {}
 
-/** Cancels every pending reminder (used on teardown / full reschedule). */
-export function cancelAllReminders(): void {
-  for (const timer of timers.values()) clearTimeout(timer);
-  timers.clear();
-}
-
-function fire(reminder: Reminder): void {
-  try {
-    sendNotification({ title: reminder.title, body: dueBody(reminder) });
-  } catch (error) {
-    writeDiagnostic("warn", "Failed to fire reminder", {
-      id: reminder.id,
-      error: String(error),
-    });
-  }
-}
+/** Inert counterpart to {@link cancelReminder} for a full reschedule. */
+export function cancelAllReminders(): void {}

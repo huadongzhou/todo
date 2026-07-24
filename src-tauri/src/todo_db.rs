@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -93,6 +94,35 @@ const CREATE_QUARANTINE: &str = "CREATE TABLE IF NOT EXISTS todo_quarantine (
 const PARK_UNREADABLE: &str = "INSERT OR IGNORE INTO todo_quarantine
     (todo_id, column_name, raw, parked_at)
     VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))";
+
+/// Reminders the native scheduler has already raised, keyed on the task and the
+/// exact instant that came due.
+///
+/// It is the durable half of "a reminder fires once": the scheduler polls the
+/// todos, raises whatever is due, and records it here, so a later poll — this run
+/// or after a restart — skips what already went out instead of raising it again.
+/// The instant is part of the key on purpose: re-arming a task at a new time is a
+/// new pair the old delivery does not cover, so an edited reminder fires again
+/// while an unchanged one stays quiet. Like the quarantine table it carries no
+/// schema revision of its own — the layout only ever gains rows, never columns —
+/// so `IF NOT EXISTS` is the whole migration.
+const CREATE_REMINDER_DELIVERIES: &str = "CREATE TABLE IF NOT EXISTS reminder_deliveries (
+    todo_id TEXT NOT NULL,
+    reminder_at TEXT NOT NULL,
+    delivered_at TEXT NOT NULL,
+    PRIMARY KEY (todo_id, reminder_at)
+)";
+
+/// Records that one reminder was raised. The primary key makes recording the same
+/// pair twice a no-op, so a poll that re-reads a row it just delivered — or a
+/// crash between raising and recording — costs nothing.
+const RECORD_REMINDER_DELIVERY: &str = "INSERT OR IGNORE INTO reminder_deliveries
+    (todo_id, reminder_at, delivered_at)
+    VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))";
+
+/// Every reminder pair already raised, read in one statement so the scheduler
+/// decides from a set rather than a lookup per todo.
+const SELECT_REMINDER_DELIVERIES: &str = "SELECT todo_id, reminder_at FROM reminder_deliveries";
 
 /// Columns added after revision 1, with the type each one carries. A file older
 /// than this build is brought up by adding whichever of these it is missing —
@@ -412,6 +442,7 @@ fn initialise(connection: &Connection) -> Result<(), rusqlite::Error> {
     let _mode: String = connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     connection.execute_batch(CREATE_SCHEMA)?;
     connection.execute_batch(CREATE_QUARANTINE)?;
+    connection.execute_batch(CREATE_REMINDER_DELIVERIES)?;
 
     let stored: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     let added = reconcile_columns(connection)?;
@@ -608,6 +639,33 @@ impl TodoDb {
             Ok(())
         })
     }
+
+    /// The `(todo_id, reminder_at)` pairs the native scheduler has already raised.
+    ///
+    /// Read whole once a poll: the decision of what is due is a pure function of
+    /// the todos and this set (see `todo_domain::reminder::due_reminders`), so
+    /// handing it the set is cheaper and more testable than a lookup per row.
+    pub fn delivered_reminders(&self) -> Result<HashSet<(String, String)>, TodoDbError> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(SELECT_REMINDER_DELIVERIES)?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+            rows.collect()
+        })
+    }
+
+    /// Records that a reminder was raised, so no later poll raises it again.
+    /// Recording the same pair twice is a no-op (see [`RECORD_REMINDER_DELIVERY`]).
+    pub fn record_reminder_delivery(
+        &self,
+        todo_id: &str,
+        reminder_at: &str,
+    ) -> Result<(), TodoDbError> {
+        self.with_connection(|connection| {
+            connection.execute(RECORD_REMINDER_DELIVERY, params![todo_id, reminder_at])?;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -720,6 +778,14 @@ mod tests {
         assert!(matches!(db.delete("a"), Err(TodoDbError::Unavailable)));
         assert!(matches!(
             db.replay_pending(&[todo("a", "2026-07-01T00:00:00Z")], &["b".to_owned()]),
+            Err(TodoDbError::Unavailable)
+        ));
+        assert!(matches!(
+            db.delivered_reminders(),
+            Err(TodoDbError::Unavailable)
+        ));
+        assert!(matches!(
+            db.record_reminder_delivery("a", "2026-07-24T09:00:00Z"),
             Err(TodoDbError::Unavailable)
         ));
     }
@@ -1179,6 +1245,56 @@ mod tests {
         let stored = reopened.list().expect("list todos");
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].id, "a");
+
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_recorded_reminder_delivery_reads_back_and_ignores_a_repeat() {
+        let db = memory_db();
+        assert!(
+            db.delivered_reminders().expect("read empty deliveries").is_empty(),
+            "a fresh database has raised nothing"
+        );
+
+        db.record_reminder_delivery("a", "2026-07-24T09:00:00Z")
+            .expect("record a delivery");
+        // The same pair again is a no-op, so a poll that re-reads a just-delivered
+        // row does not pile up a second record.
+        db.record_reminder_delivery("a", "2026-07-24T09:00:00Z")
+            .expect("record the same delivery again");
+        // A second instant on the same task is its own pair — an edited reminder
+        // that must be able to fire again.
+        db.record_reminder_delivery("a", "2026-07-24T18:00:00Z")
+            .expect("record a second instant");
+
+        let delivered = db.delivered_reminders().expect("read deliveries");
+        assert_eq!(delivered.len(), 2);
+        assert!(delivered.contains(&("a".to_owned(), "2026-07-24T09:00:00Z".to_owned())));
+        assert!(delivered.contains(&("a".to_owned(), "2026-07-24T18:00:00Z".to_owned())));
+    }
+
+    #[test]
+    fn reminder_deliveries_survive_reopening_the_file() {
+        // The whole point of the table: a restart must read back what already went
+        // out so it does not raise it a second time.
+        let path = std::env::temp_dir().join(format!(
+            "todo-reminders-test-{}-{:?}.sqlite",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let db = TodoDb::open(&path);
+            db.record_reminder_delivery("a", "2026-07-24T09:00:00Z")
+                .expect("record before reopening");
+        }
+
+        let reopened = TodoDb::open(&path);
+        let delivered = reopened.delivered_reminders().expect("read after reopening");
+        assert!(delivered.contains(&("a".to_owned(), "2026-07-24T09:00:00Z".to_owned())));
 
         drop(reopened);
         let _ = std::fs::remove_file(&path);
