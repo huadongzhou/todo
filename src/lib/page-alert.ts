@@ -2,11 +2,11 @@
  * The one thing the page says at a time, and the rule for which of the
  * candidates gets to say it.
  *
- * The page owns a single `role="status"` region (see `App.vue`), so three
- * sources — the form, storage and the export — compete for one line. Ranking
- * them here rather than in the page is what keeps the page from guessing at
- * properties only the producer knows: how long a line lives is a fact about
- * where it came from, not about where it is shown.
+ * The page owns a single `role="status"` region (see `App.vue`), so four
+ * sources — the form, storage, the export and the reminder bar — compete for
+ * one line. Ranking them here rather than in the page is what keeps the page
+ * from guessing at properties only the producer knows: how long a line lives is
+ * a fact about where it came from, not about where it is shown.
  */
 
 export type AlertTone = "success" | "warn" | "error";
@@ -21,7 +21,7 @@ export type AlertTone = "success" | "warn" | "error";
  */
 export type AlertLifetime = "transient" | "standing";
 
-export type AlertSource = "form" | "storage" | "export";
+export type AlertSource = "form" | "storage" | "export" | "reminder";
 
 export interface PageAlert {
   readonly tone: AlertTone;
@@ -32,7 +32,7 @@ export interface PageAlert {
 
 const LIFETIME_ORDER: Record<AlertLifetime, number> = { transient: 0, standing: 1 };
 const TONE_ORDER: Record<AlertTone, number> = { error: 0, warn: 1, success: 2 };
-const SOURCE_ORDER: Record<AlertSource, number> = { form: 0, storage: 1, export: 2 };
+const SOURCE_ORDER: Record<AlertSource, number> = { form: 0, storage: 1, export: 2, reminder: 3 };
 
 /**
  * The line to show, out of everything that has something to say right now.
@@ -49,9 +49,13 @@ const SOURCE_ORDER: Record<AlertSource, number> = { form: 0, storage: 1, export:
  * decides: "some changes did not reach this machine" outranks "the title stops
  * here", which loses nothing at all.
  *
- * The constraint that keeps this honest, to be checked whenever a fourth source
- * appears: a line that can be covered must either be covered only by something
- * with a definite end, or have a second way of being seen.
+ * The constraint that keeps this honest, checked as each source is added: a line
+ * that can be covered must either be covered only by something with a definite
+ * end, or have a second way of being seen. The reminder bar (the fourth source)
+ * is transient/success, so it can cover a standing storage line — allowed only
+ * because it has a definite end: the bar clears it on the next action (skip,
+ * complete, close), when its last reminder leaves (the due set empties), or when
+ * it unmounts, after which the storing line returns.
  */
 export function pickPageAlert(
   ...candidates: ReadonlyArray<PageAlert | null | undefined>

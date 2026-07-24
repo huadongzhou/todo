@@ -22,6 +22,18 @@ export const useSettingsStore = defineStore("settings", () => {
    * did it unasked would leave no way back.
    */
   const rolloverOverdue = ref(false);
+  /**
+   * Which quick "snooze" durations the reminder bar offers. All on by default:
+   * the four cover the common cases, and a user who wants fewer buttons can turn
+   * some off. "今晚"/"明天" resolve to fixed local times (20:00 / 09:00) inside
+   * the bar; those hours are not configurable here on purpose, so they can later
+   * follow the shared "默认提醒时间" / "晨间摘要时间" settings without a second
+   * copy drifting out of step.
+   */
+  const snooze5m = ref(true);
+  const snooze1h = ref(true);
+  const snoozeTonight = ref(true);
+  const snoozeTomorrow = ref(true);
   const isReady = ref(false);
   const persistenceError = ref<string | null>(null);
   let unsubscribeSystemTheme: (() => void) | undefined;
@@ -46,6 +58,10 @@ export const useSettingsStore = defineStore("settings", () => {
       closeToTray.value = await loadBooleanPreference("behavior.closeToTray", true);
       showTodayCard.value = await loadBooleanPreference("ui.showTodayCard", false);
       rolloverOverdue.value = await loadBooleanPreference("behavior.rolloverOverdue", false);
+      snooze5m.value = await loadBooleanPreference("reminder.snooze.5m", true);
+      snooze1h.value = await loadBooleanPreference("reminder.snooze.1h", true);
+      snoozeTonight.value = await loadBooleanPreference("reminder.snooze.tonight", true);
+      snoozeTomorrow.value = await loadBooleanPreference("reminder.snooze.tomorrow", true);
       await applyTheme(theme.value);
       watchSystemTheme();
       writeDiagnostic("info", "Settings restored", {
@@ -53,12 +69,20 @@ export const useSettingsStore = defineStore("settings", () => {
         closeToTray: closeToTray.value,
         showTodayCard: showTodayCard.value,
         rolloverOverdue: rolloverOverdue.value,
+        snooze5m: snooze5m.value,
+        snooze1h: snooze1h.value,
+        snoozeTonight: snoozeTonight.value,
+        snoozeTomorrow: snoozeTomorrow.value,
       });
     } catch {
       theme.value = "system";
       closeToTray.value = true;
       showTodayCard.value = false;
       rolloverOverdue.value = false;
+      snooze5m.value = true;
+      snooze1h.value = true;
+      snoozeTonight.value = true;
+      snoozeTomorrow.value = true;
       persistenceError.value = "设置恢复失败，已使用系统默认值。";
       // The fallback itself must never throw: `main.ts` awaits `bootstrap()`
       // before mounting, so a second failure here would take the whole UI down
@@ -137,12 +161,54 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  /**
+   * The write half the four snooze setters share. Each setter flips its own ref
+   * (so the checkbox reflects the choice at once) and hands the key and value
+   * here; keeping the persistence in one place is what stops four copies of the
+   * same try/catch from drifting apart.
+   */
+  async function persistSnoozePreference(key: string, enabled: boolean): Promise<void> {
+    persistenceError.value = null;
+
+    try {
+      await saveBooleanPreference(key, enabled);
+      writeDiagnostic("info", "Snooze preference updated", { key, enabled });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Snooze preference could not be persisted", { key, enabled });
+    }
+  }
+
+  async function setSnooze5m(enabled: boolean): Promise<void> {
+    snooze5m.value = enabled;
+    await persistSnoozePreference("reminder.snooze.5m", enabled);
+  }
+
+  async function setSnooze1h(enabled: boolean): Promise<void> {
+    snooze1h.value = enabled;
+    await persistSnoozePreference("reminder.snooze.1h", enabled);
+  }
+
+  async function setSnoozeTonight(enabled: boolean): Promise<void> {
+    snoozeTonight.value = enabled;
+    await persistSnoozePreference("reminder.snooze.tonight", enabled);
+  }
+
+  async function setSnoozeTomorrow(enabled: boolean): Promise<void> {
+    snoozeTomorrow.value = enabled;
+    await persistSnoozePreference("reminder.snooze.tomorrow", enabled);
+  }
+
   return {
     theme,
     themeLabel,
     closeToTray,
     showTodayCard,
     rolloverOverdue,
+    snooze5m,
+    snooze1h,
+    snoozeTonight,
+    snoozeTomorrow,
     isDesktop,
     isReady,
     persistenceError,
@@ -151,5 +217,9 @@ export const useSettingsStore = defineStore("settings", () => {
     setCloseToTray,
     setShowTodayCard,
     setRolloverOverdue,
+    setSnooze5m,
+    setSnooze1h,
+    setSnoozeTonight,
+    setSnoozeTomorrow,
   };
 });

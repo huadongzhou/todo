@@ -56,8 +56,8 @@
 │   ├── 2.3 移动端提醒
 │   │   └── ⏳ 移动端本地通知（iOS / Android）
 │   ├── 2.4 通知交互
-│   │   ├── ⏳ 通知上稍后提醒（snooze）
-│   │   ├── ⏳ 自定义稍后时长：snooze 快捷选项可配（5 分钟 / 1 小时 / 今晚 / 明天）
+│   │   ├── 🚧 通知上稍后提醒（snooze）：降级为应用内快捷条（Windows 通知动作按钮能力不足）（snooze 机制＝把 `reminderAt` 改到未来时刻，下一轮 2.2 轮询按新 `(todo_id, reminder_at)` 键重发、旧键已投递不重发，故零契约/零 Rust 运行时代码，前端 `todoStore.update(id,{reminderAt})` 即可；主交付＝应用内 snooze 快捷条 `src/components/ReminderSnoozeBar.vue`，挂主窗顶部列表上方，对「刚到点、仍待处理」的提醒（与 `due_reminders` gating 同口径：open ∧ 未归档 ∧ 未依赖锁定 ∧ reminderAt≤now，前端纯派生自 store、不新增 command）逐条给稍后/完成/跳过，`v-if=isDesktop` 门控、反馈走既有单一 live region（`page-alert.ts` 增补 `reminder` 源）；**通知气泡动作按钮：经核实 `tauri-plugin-notification` 2.3.3 桌面路径 builder 不透传 action、`show()` 弃句柄无点击回收，Windows 需绕开插件用 winrt+COM＝新增依赖+大量原生工作，按规格定为「能力确认后再接的渐进增强」，本任务不实现**；「点通知唤前台」同因不接，快捷条对任意方式打开应用都可见故非阻塞。移动端本地通知与其快捷条接入仍归 2.3）
+│   │   ├── ✅ 自定义稍后时长：snooze 快捷选项可配（5 分钟 / 1 小时 / 今晚 / 明天）（设置面板新增「提醒」fieldset，四档各一开关复选框、默认全开、不做自定义数值输入；键 `reminder.snooze.{5m,1h,tonight,tomorrow}` 走既有 `saveBooleanPreference`/`loadBooleanPreference`（含浏览器回退）、按 `rolloverOverdue` 同一模式落 `useSettingsStore`；今晚固定 20:00、明天固定 09:00 常量实现（将来复用「默认提醒时间」外观与设置/02、「晨间摘要时间」提醒通知/06 的接线点），「今晚」仅 20:00>now 时呈现；快捷条只渲染启用且解析为未来时刻的档，全部取消勾选给内联提示不硬拦）
 │   │   └── ⏳ 到期重催：到期未完成持续提醒（可设开关）
 │   └── 2.5 提醒策略
 │       ├── ⏳ 勿扰时段：静默窗口内提醒暂存，结束后补推

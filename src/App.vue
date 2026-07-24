@@ -12,6 +12,7 @@ import { Check, ClipboardList, Plus, Settings2, SlidersHorizontal, X } from "luc
 import ArchiveSection from "@/components/ArchiveSection.vue";
 import Button from "@/components/ui/button/Button.vue";
 import TodayCard from "@/components/TodayCard.vue";
+import ReminderSnoozeBar from "@/components/ReminderSnoozeBar.vue";
 import TodoFields, { createEmptyDraft, type TodoDraft } from "@/components/TodoFields.vue";
 import TodoItem from "@/components/TodoItem.vue";
 import type { ThemePreference } from "@/lib/appearance";
@@ -186,14 +187,27 @@ const exportButtonRef = ref<ComponentPublicInstance | null>(null);
 const exportAlert = ref<PageAlert | null>(null);
 
 /**
+ * The snooze bar's line, in the same shape as the others so it shares the one
+ * region. It is transient/success and lives here, next to `exportAlert`, because
+ * it is a sentence about an action just taken on this page, not domain state; the
+ * bar hands up the message (or `null` to drop it) and this file wraps it.
+ */
+const reminderAlert = ref<PageAlert | null>(null);
+function announceReminder(message: string | null): void {
+  reminderAlert.value = message
+    ? { tone: "success", message, lifetime: "transient", source: "reminder" }
+    : null;
+}
+
+/**
  * What the single page-level alert says.
  *
- * The three sources are handed over as they are and ranked by `pickPageAlert`;
+ * The four sources are handed over as they are and ranked by `pickPageAlert`;
  * the page does not decide which wins, because how long a line lives is known
  * only where it was produced. The rule and the reasoning are in that module.
  */
 const pageAlert = computed(() =>
-  pickPageAlert(formAlert.value, todoStore.storageAlert, exportAlert.value),
+  pickPageAlert(formAlert.value, todoStore.storageAlert, exportAlert.value, reminderAlert.value),
 );
 
 // A result the user cannot see any more has nothing left to report, and leaving
@@ -464,6 +478,83 @@ async function duplicateTodo(id: string): Promise<void> {
         </p>
       </fieldset>
 
+      <!--
+        No `isDesktop` gate, same as the "任务" group above it: which snooze
+        durations to offer is a reminder-behaviour preference, not a desktop
+        capability, and the phone reuses these once its local notifications land.
+      -->
+      <fieldset class="m-0 mt-6 border-0 p-0" aria-labelledby="reminder-settings-heading">
+        <legend
+          id="reminder-settings-heading"
+          class="mb-3 font-medium text-slate-800 dark:text-slate-200"
+        >
+          提醒
+        </legend>
+        <p class="mb-3 px-3 text-xs text-slate-500 dark:text-slate-400">
+          以下时长会作为“稍后提醒”的快捷选项。
+        </p>
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.snooze5m"
+            @change="settingsStore.setSnooze5m(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">5 分钟</span>
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >延后 5 分钟后再次提醒。</span
+            >
+          </span>
+        </label>
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.snooze1h"
+            @change="settingsStore.setSnooze1h(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">1 小时</span>
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >延后 1 小时后再次提醒。</span
+            >
+          </span>
+        </label>
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.snoozeTonight"
+            @change="settingsStore.setSnoozeTonight(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">今晚</span>
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >延后到今天 20:00 再次提醒（已过 20:00 时当天不提供此项）。</span
+            >
+          </span>
+        </label>
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.snoozeTomorrow"
+            @change="settingsStore.setSnoozeTomorrow(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">明天</span>
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >延后到明天 09:00 再次提醒。</span
+            >
+          </span>
+        </label>
+      </fieldset>
+
       <fieldset
         v-if="settingsStore.isDesktop"
         class="m-0 mt-6 border-0 p-0"
@@ -637,6 +728,14 @@ async function duplicateTodo(id: string): Promise<void> {
       >
       <span>随时打开快速新增。</span>
     </p>
+
+    <!--
+      Reminders that have come due and are still waiting sit here, above the list
+      they are about: one at a time, each offering to be pushed to a later moment.
+      It announces through the one page region rather than a region of its own —
+      hence `@announce`, which this file wraps into the shared alert.
+    -->
+    <ReminderSnoozeBar @announce="announceReminder" />
 
     <section aria-labelledby="todo-list-heading">
       <h2 id="todo-list-heading" class="sr-only">待办列表</h2>
