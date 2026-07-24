@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>统计 · 成就 · 热力图周报 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01 / 02 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01 · 02 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 侧栏 / 输入底衬 */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --input-bg: #f1f5f9;       /* slate-100 输入底 */
+    --row-divider: #f1f5f9;    /* slate-100 行分隔 */
+    --icon-muted: #94a3b8;     /* slate-400 图标默认 */
+    --icon-hover: #020617;     /* slate-950 图标 hover */
+    /* ghost 按钮（Button.vue） */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（DESIGN.md 语义色，浅色「100 底 + 700 字」；与 01 / 02 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700 */
+    /* 热力图色阶（成功 emerald hue；端点复用既有 success 令牌，中段为 Tailwind emerald 300/500） */
+    --hm-0: #f1f5f9;  /* 空/无完成 = normal-bg（slate-100） */
+    --hm-1: #d1fae5;  /* L1 = emerald-100（= success-bg 浅） */
+    --hm-2: #6ee7b7;  /* L2 = emerald-300 */
+    --hm-3: #10b981;  /* L3 = emerald-500 */
+    --hm-4: #047857;  /* L4 = emerald-700（= success-fg 浅） */
+    --hm-outline: rgba(15,23,42,0.06); /* 格子内描边（slate-900/6，暗色成对） */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --border: #1e293b;         /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --input-bg: #0f172a;       /* slate-900 */
+    --row-divider: #1e293b;    /* slate-800 */
+    --icon-muted: #94a3b8;     /* slate-400 */
+    --icon-hover: #f8fafc;     /* slate-100 */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+    /* 暗色热力图：亮度随完成量升高（端点复用 success 令牌，中段 emerald 500/700/900） */
+    --hm-0: #1e293b;  /* 空 = normal-bg 暗（slate-800） */
+    --hm-1: #064e3b;  /* L1 = emerald-900 */
+    --hm-2: #047857;  /* L2 = emerald-700 */
+    --hm-3: #10b981;  /* L3 = emerald-500 */
+    --hm-4: #6ee7b7;  /* L4 = emerald-300（= success-fg 暗） */
+    --hm-outline: rgba(226,232,240,0.08); /* slate-200/8 */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+
+  /* ===== 抬头（与 01 / 02 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* ===== 应用窗（导航壳，与 02 同款） ===== */
+  .app-window { display: flex; align-items: stretch; overflow: hidden; margin-bottom: 28px; }
+
+  .sidebar {
+    width: 256px; flex: none; background: var(--nested-bg);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 20px 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; }
+  .brand .logo {
+    width: 32px; height: 32px; border-radius: 8px; background: #0ea5e9;
+    display: flex; align-items: center; justify-content: center; color: #fff; flex: none;
+  }
+  .brand .name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand .name span { color: #0ea5e9; }
+  .side-cta {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; height: 44px; border: none; border-radius: 8px;
+    background: #0ea5e9; color: #fff; font-family: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; margin-bottom: 20px;
+  }
+  .nav-group { margin-bottom: 18px; }
+  .nav-label {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-secondary); padding: 0 10px; margin-bottom: 8px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; min-height: 44px;
+    padding: 8px 10px; border-radius: 8px; color: var(--text-secondary);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .nav-item .ic { color: currentColor; flex: none; }
+  .nav-item .lbl { flex: 1; min-width: 0; color: var(--text); }
+  .nav-item .cnt { font-size: 12px; color: var(--text-secondary); }
+  .nav-item.active { background: var(--info-bg); color: var(--info-fg); }
+  .nav-item.active .lbl { color: var(--info-fg); }
+  .nav-item.active .cnt { color: var(--info-fg); }
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 4px; }
+  .tag-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 9999px;
+    background: var(--normal-bg); color: var(--normal-fg);
+  }
+  .tag-chip .swatch { width: 8px; height: 8px; border-radius: 50%; }
+  .side-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
+
+  /* 主区 */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--card-bg); }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+  }
+  .page-title { display: inline-flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; }
+  .page-title svg { color: var(--text-secondary); }
+  .top-right { display: flex; align-items: center; gap: 12px; }
+  .ghost-btn {
+    display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 14px;
+    border: none; border-radius: 8px; background: transparent; color: var(--ghost-text);
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .ghost-btn:hover { background: var(--ghost-hover-bg); color: var(--ghost-hover-text); }
+  .primary-btn {
+    display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 16px;
+    border: none; border-radius: 8px; background: #0ea5e9; color: #fff;
+    font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+
+  .content { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* 区块标题 */
+  .block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .block-title { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; }
+  .block-title svg { color: var(--text-secondary); flex: none; }
+  .block-sub { font-size: 12px; color: var(--text-secondary); }
+  .panel { padding: 24px; }
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+
+  /* 数据源单源标注 chip */
+  .source-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 9999px;
+    background: var(--info-bg); color: var(--info-fg);
+  }
+  .source-chip svg { flex: none; }
+
+  /* ===== 顶部数据卡 ===== */
+  .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .stat-card { padding: 20px; }
+  .stat-top { display: flex; align-items: center; justify-content: space-between; }
+  .stat-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+  .stat-ic { color: var(--icon-muted); }
+  .stat-num { font-size: 40px; line-height: 1.1; font-weight: 700; color: var(--success-fg); margin-top: 10px; }
+  .stat-num .unit { font-size: 16px; font-weight: 500; color: var(--text-secondary); margin-left: 4px; }
+  .stat-meta { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .stat-sub { font-size: 13px; color: var(--text-secondary); }
+  .rate-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 9999px;
+    background: var(--success-bg); color: var(--success-fg);
+  }
+  .rate-pill.flat { background: var(--normal-bg); color: var(--normal-fg); }
+  .progress { height: 6px; border-radius: 9999px; background: var(--normal-bg); margin-top: 14px; overflow: hidden; }
+  .progress .fill { height: 100%; border-radius: 9999px; background: var(--hm-3); }
+
+  /* ===== 热力图 ===== */
+  .hm-cal { display: inline-flex; flex-direction: column; gap: 6px; }
+  .hm-top { display: flex; }
+  .hm-top .sp { width: 30px; flex: none; }
+  .hm-months2 { display: grid; grid-template-columns: repeat(53, 12px); gap: 3px; }
+  .hm-months2 span { grid-row: 1; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+  .hm-body { display: flex; gap: 6px; }
+  .hm-wd { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; width: 24px; }
+  .hm-wd span { font-size: 10px; line-height: 12px; color: var(--text-secondary); }
+  .hm2 { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); grid-auto-columns: 12px; gap: 3px; }
+  .hm-cell { width: 12px; height: 12px; border-radius: 3px; background: var(--hm-0); box-shadow: inset 0 0 0 1px var(--hm-outline); }
+  .hm-cell.l1 { background: var(--hm-1); }
+  .hm-cell.l2 { background: var(--hm-2); }
+  .hm-cell.l3 { background: var(--hm-3); }
+  .hm-cell.l4 { background: var(--hm-4); }
+  .hm-cell.hm-future { background: transparent; box-shadow: none; }
+  .hm-legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .hm-legend .cells { display: inline-flex; gap: 3px; }
+  .hm-legend .lg { width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px var(--hm-outline); }
+  .hm-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+  /* 紧凑热力图：状态板小面板宽度有限（约 540px 可用），缩小格子以容纳整年，同一组件小尺寸变体 */
+  .hm-cal.compact .hm-body { gap: 0; }
+  .hm-cal.compact .hm-wd { display: none; }
+  .hm-cal.compact .hm2 { grid-template-rows: repeat(7, 8px); grid-auto-columns: 8px; gap: 2px; }
+  .hm-cal.compact .hm-cell { width: 8px; height: 8px; border-radius: 2px; }
+
+  /* 段控件（与 02 segmented 同款） */
+  .segmented { display: inline-flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--nested-bg); }
+  .seg {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 5px 14px;
+    border-radius: 6px; border: none; font-family: inherit; font-size: 13px; font-weight: 500;
+    cursor: pointer; background: transparent; color: var(--text-secondary);
+  }
+  .seg.active { background: var(--card-bg); color: var(--text); box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+  .dark .seg.active { background: #1e293b; }
+
+  /* ===== 双列布局 ===== */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+  /* streak */
+  .streak-main { display: flex; align-items: center; gap: 16px; }
+  .flame-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 18px; font-weight: 700; padding: 10px 18px; border-radius: 9999px;
+    background: var(--success-bg); color: var(--success-fg);
+  }
+  .flame-pill svg { flex: none; }
+  .flame-pill .n { font-variant-numeric: tabular-nums; }
+  .streak-side { display: flex; flex-direction: column; gap: 2px; }
+  .streak-side .k { font-size: 13px; color: var(--text-secondary); }
+  .streak-side .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .streak-week { display: flex; gap: 8px; margin-top: 20px; }
+  .sw-day { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .sw-dot {
+    width: 30px; height: 30px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--circle-border, #cbd5e1); background: var(--card-bg); color: var(--text-secondary);
+  }
+  .dark .sw-dot { border-color: #475569; }
+  .sw-dot.done { background: var(--success-bg); border-color: transparent; color: var(--success-fg); }
+  .sw-dot.today { box-shadow: 0 0 0 2px var(--ring-offset), 0 0 0 4px #0ea5e9; }
+  .sw-lbl { font-size: 11px; color: var(--text-secondary); }
+
+  /* weekly report */
+  .report-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .auto-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 500; padding: 3px 9px; border-radius: 9999px;
+    background: var(--info-bg); color: var(--info-fg);
+  }
+  .report-stats { display: flex; gap: 24px; padding: 14px 0; border-top: 1px solid var(--row-divider); border-bottom: 1px solid var(--row-divider); }
+  .report-stat .rn { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .report-stat .rl { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+  .report-hl { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+  .hl-item { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; line-height: 1.5; }
+  .hl-item svg { color: var(--success-fg); flex: none; margin-top: 3px; }
+
+  /* 里程碑徽章 */
+  .badge-wall { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 12px; }
+  .medal { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 12px 6px; border-radius: 10px; border: 1px solid var(--border); background: var(--nested-bg); }
+  .medal .disc {
+    width: 48px; height: 48px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--success-bg); color: var(--success-fg);
+  }
+  .medal .disc.brand { background: var(--info-bg); color: var(--info-fg); }
+  .medal .mt { font-size: 13px; font-weight: 600; }
+  .medal .ms { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
+  .medal.locked { opacity: 0.55; }
+  .medal.locked .disc { background: var(--normal-bg); color: var(--icon-muted); }
+
+  /* 拖延洞察 */
+  .defer-stats { display: flex; gap: 24px; margin-bottom: 16px; }
+  .defer-stat .dn { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--soon-fg); }
+  .defer-stat .dn.alt { color: var(--overdue-fg); }
+  .defer-stat .dl { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+  .defer-bar-wrap { margin-bottom: 16px; }
+  .defer-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .defer-bar-row .bl { width: 88px; font-size: 12px; color: var(--text-secondary); flex: none; }
+  .defer-bar { height: 10px; border-radius: 9999px; background: var(--soon-bg); flex: 1; overflow: hidden; }
+  .defer-bar .bf { height: 100%; background: var(--soon-fg); border-radius: 9999px; }
+  .defer-bar.red { background: var(--overdue-bg); }
+  .defer-bar.red .bf { background: var(--overdue-fg); }
+  .defer-bar-row .bv { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; width: 28px; text-align: right; flex: none; }
+
+  /* 提示条（与 01 / 02 alert 同款） */
+  .alert { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; }
+  .alert svg { flex: none; margin-top: 1px; }
+  .alert.info { background: var(--info-bg); color: var(--info-fg); }
+  .alert.success { background: var(--success-bg); color: var(--success-fg); }
+  .alert.error { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .alert.warn { background: var(--soon-bg); color: var(--soon-fg); }
+  .alert .a-txt b { font-weight: 700; }
+
+  /* ===== 分享卡片（本地渲染成图；纯色扁平卡面，无渐变） ===== */
+  .share-zone { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .share-card {
+    width: 380px; flex: none; border-radius: 16px; padding: 24px;
+    background: #0f172a; color: #f8fafc;      /* 卡面固定深底（slate-900），高对比、扁平 */
+    border: 1px solid #1e293b;
+  }
+  .share-card .sc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .share-card .sc-brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
+  .share-card .sc-brand .lg { width: 26px; height: 26px; border-radius: 7px; background: #0ea5e9; display: flex; align-items: center; justify-content: center; color: #fff; }
+  .share-card .sc-brand .nm span { color: #38bdf8; }
+  .share-card .sc-period { font-size: 12px; color: #94a3b8; }
+  .share-card .sc-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .share-card .sc-caption { font-size: 13px; color: #cbd5e1; margin-bottom: 20px; }
+  .share-card .sc-stats { display: flex; gap: 18px; margin-bottom: 20px; }
+  .share-card .sc-stat .sv { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; color: #6ee7b7; }
+  .share-card .sc-stat .sl { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+  .share-card .sc-strip { display: flex; gap: 3px; margin-bottom: 16px; }
+  .share-card .sc-strip .c { width: 14px; height: 14px; border-radius: 3px; }
+  .share-card .sc-foot { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #64748b; border-top: 1px solid #1e293b; padding-top: 14px; }
+  .share-actions { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 14px; }
+  .share-actions .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .share-note { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+
+  /* 状态板 empty（与 01 / 02 empty 语言一致） */
+  .states { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .panel-title { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .panel-note { font-size: 12px; color: var(--text-secondary); margin: 0 0 16px; }
+  .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; padding: 24px 16px; }
+  .empty .icon-wrap { color: var(--text-secondary); opacity: 0.7; }
+  .empty .et { font-size: 16px; font-weight: 600; }
+  .empty .es { font-size: 14px; color: var(--text-secondary); max-width: 300px; line-height: 1.5; }
+  .mini-stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .mini-stat { padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--nested-bg); text-align: center; }
+  .mini-stat .mn { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+  .mini-stat .mn.muted { color: var(--icon-muted); }
+  .mini-stat .ml { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .foot-note { text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>统计 · 成就 · 热力图周报</h1>
+      <p class="lead">成就单页 · 数据卡 / 贡献热力图 / 连续记录 / 周报 / 里程碑 / 拖延洞察 / 分享卡片 · 统计单源一致</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <!-- ===== 应用窗：导航壳 + 成就页主态 ===== -->
+  <div class="surface-card app-window">
+
+    <!-- 侧栏（与 02 同款；本页「成就」为激活项） -->
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <span class="logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <span class="name">Just<span> Do</span></span>
+      </div>
+
+      <button class="side-cta" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+        新建任务
+      </button>
+
+      <nav class="nav-group" aria-label="清单">
+        <div class="nav-label">清单</div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="lbl">收件箱</span><span class="cnt num">4</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+          <span class="lbl">今天</span><span class="cnt num">6</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+          <span class="lbl">计划</span><span class="cnt num">12</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+          <span class="lbl">已完成</span><span class="cnt num">38</span>
+        </div>
+      </nav>
+
+      <nav class="nav-group" aria-label="标签">
+        <div class="nav-label">标签</div>
+        <div class="tag-row">
+          <span class="tag-chip"><span class="swatch" style="background:#0ea5e9"></span>工作</span>
+          <span class="tag-chip"><span class="swatch" style="background:#10b981"></span>个人</span>
+          <span class="tag-chip"><span class="swatch" style="background:#f59e0b"></span>学习</span>
+        </div>
+      </nav>
+
+      <nav class="nav-group" aria-label="更多">
+        <div class="nav-item active" aria-current="page">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+          <span class="lbl">成就</span>
+        </div>
+      </nav>
+
+      <div class="side-foot">
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+          <span class="lbl">设置</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主区：成就页 -->
+    <section class="main" aria-label="成就与统计">
+      <div class="topbar">
+        <span class="page-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+          成就
+        </span>
+        <div class="top-right">
+          <button class="ghost-btn" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"/></svg>
+            导出周报
+          </button>
+          <button class="primary-btn" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></svg>
+            分享成就卡
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+
+        <!-- ===== 1. 顶部数据卡 ===== -->
+        <section>
+          <div class="block-head">
+            <span class="block-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="8" rx="1"/><rect x="12" y="6" width="3" height="12" rx="1"/><rect x="17" y="13" width="3" height="5" rx="1"/></svg>
+              完成概览
+            </span>
+            <span class="source-chip">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              数据源：统计 selector（与「视图 · 统计」单源）
+            </span>
+          </div>
+          <div class="stat-row">
+            <div class="surface-card stat-card">
+              <div class="stat-top">
+                <span class="stat-label">今日完成</span>
+                <svg class="stat-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <div class="stat-num num">5<span class="unit">/ 6 项</span></div>
+              <div class="stat-meta">
+                <span class="rate-pill"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>完成率 83%</span>
+                <span class="stat-sub">较昨日 +1</span>
+              </div>
+              <div class="progress"><div class="fill" style="width:83%"></div></div>
+            </div>
+
+            <div class="surface-card stat-card">
+              <div class="stat-top">
+                <span class="stat-label">本周完成</span>
+                <svg class="stat-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+              </div>
+              <div class="stat-num num">28<span class="unit">/ 34 项</span></div>
+              <div class="stat-meta">
+                <span class="rate-pill"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>完成率 82%</span>
+                <span class="stat-sub">较上周 +4%</span>
+              </div>
+              <div class="progress"><div class="fill" style="width:82%"></div></div>
+            </div>
+
+            <div class="surface-card stat-card">
+              <div class="stat-top">
+                <span class="stat-label">本月完成</span>
+                <svg class="stat-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18"/><path d="M3 15h18"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg>
+              </div>
+              <div class="stat-num num">112<span class="unit">/ 140 项</span></div>
+              <div class="stat-meta">
+                <span class="rate-pill flat">完成率 80%</span>
+                <span class="stat-sub">全月坚持 24 天</span>
+              </div>
+              <div class="progress"><div class="fill" style="width:80%"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== 2. 热力图 ===== -->
+        <section class="surface-card panel">
+          <div class="block-head">
+            <span class="block-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/></svg>
+              完成热力图
+            </span>
+            <div class="segmented" role="tablist" aria-label="时间范围">
+              <button class="seg active" role="tab" aria-selected="true">近一年</button>
+              <button class="seg" role="tab" aria-selected="false">近 6 月</button>
+              <button class="seg" role="tab" aria-selected="false">近 3 月</button>
+            </div>
+          </div>
+
+          <div class="hm-cal">
+            <div class="hm-top"><span class="sp"></span><div class="hm-months2" id="hm-months-main"></div></div>
+            <div class="hm-body">
+              <div class="hm-wd"><span></span><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span></div>
+              <div class="hm2" id="hm-main" role="img" aria-label="近一年每日完成热力图，颜色越深当日完成越多"></div>
+            </div>
+          </div>
+
+          <div class="hm-foot">
+            <span class="caption">近 12 个月 · 每格为一天，鼠标悬停查看当日完成数（颜色不孤用，附图例与逐格数值）。</span>
+            <span class="hm-legend">
+              少
+              <span class="cells">
+                <span class="lg" style="background:var(--hm-0)"></span>
+                <span class="lg" style="background:var(--hm-1)"></span>
+                <span class="lg" style="background:var(--hm-2)"></span>
+                <span class="lg" style="background:var(--hm-3)"></span>
+                <span class="lg" style="background:var(--hm-4)"></span>
+              </span>
+              多
+            </span>
+          </div>
+        </section>
+
+        <!-- ===== 3. streak + 周报 ===== -->
+        <div class="grid-2">
+          <!-- 连续记录 -->
+          <section class="surface-card panel">
+            <div class="block-head">
+              <span class="block-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+                连续记录
+              </span>
+            </div>
+            <div class="streak-main">
+              <span class="flame-pill">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+                连续 <span class="n">12</span> 天
+              </span>
+              <div class="streak-side">
+                <span class="k">最长记录</span>
+                <span class="v">21 天</span>
+              </div>
+            </div>
+            <div class="streak-week" aria-label="本周每日完成情况">
+              <div class="sw-day"><span class="sw-dot done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span class="sw-lbl">一</span></div>
+              <div class="sw-day"><span class="sw-dot done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span class="sw-lbl">二</span></div>
+              <div class="sw-day"><span class="sw-dot done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span class="sw-lbl">三</span></div>
+              <div class="sw-day"><span class="sw-dot done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span class="sw-lbl">四</span></div>
+              <div class="sw-day"><span class="sw-dot done today"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span class="sw-lbl">今天</span></div>
+              <div class="sw-day"><span class="sw-dot"></span><span class="sw-lbl">六</span></div>
+              <div class="sw-day"><span class="sw-dot"></span><span class="sw-lbl">日</span></div>
+            </div>
+          </section>
+
+          <!-- 周报模板 -->
+          <section class="surface-card panel">
+            <div class="block-head">
+              <span class="block-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+                本周周报
+              </span>
+              <span class="block-sub num">7 月 20 日 – 7 月 26 日</span>
+            </div>
+            <div class="report-meta">
+              <span class="auto-badge">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/><path d="M12 2 9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5z"/></svg>
+                自动生成
+              </span>
+              <span class="caption">每周一 09:00 依统计 selector 汇总</span>
+            </div>
+            <div class="report-stats">
+              <div class="report-stat"><div class="rn num" style="color:var(--success-fg)">28</div><div class="rl">完成任务</div></div>
+              <div class="report-stat"><div class="rn num">82%</div><div class="rl">完成率</div></div>
+              <div class="report-stat"><div class="rn num">6.2h</div><div class="rl">专注时长</div></div>
+            </div>
+            <div class="report-hl">
+              <div class="hl-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>连续 5 天完成「阅读 30 分钟」，习惯稳固。</div>
+              <div class="hl-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>周三清空收件箱，当日完成率 100%。</div>
+              <div class="hl-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>工作标签完成 14 项，占本周一半。</div>
+            </div>
+          </section>
+        </div>
+
+        <!-- ===== 4. 里程碑徽章 + 拖延洞察 ===== -->
+        <div class="grid-2">
+          <!-- 里程碑徽章 -->
+          <section class="surface-card panel">
+            <div class="block-head">
+              <span class="block-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+                里程碑徽章
+              </span>
+              <span class="block-sub num">已获 4 / 6</span>
+            </div>
+            <div class="badge-wall">
+              <div class="medal">
+                <span class="disc brand"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>
+                <span class="mt">初出茅庐</span><span class="ms">创建第一个任务</span>
+              </div>
+              <div class="medal">
+                <span class="disc"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg></span>
+                <span class="mt">七日连击</span><span class="ms">连续 7 天完成</span>
+              </div>
+              <div class="medal">
+                <span class="disc"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg></span>
+                <span class="mt">百项达成</span><span class="ms">累计完成 100 项</span>
+              </div>
+              <div class="medal">
+                <span class="disc"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
+                <span class="mt">收件箱清零</span><span class="ms">单日清空收件箱</span>
+              </div>
+              <div class="medal locked">
+                <span class="disc"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+                <span class="mt">早起鸟</span><span class="ms">30 天内 20 天早于 8 点</span>
+              </div>
+              <div class="medal locked">
+                <span class="disc"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+                <span class="mt">月度全勤</span><span class="ms">整月每天都有完成</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 拖延洞察 -->
+          <section class="surface-card panel">
+            <div class="block-head">
+              <span class="block-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l2 2"/><path d="M3.05 11a9 9 0 1 1 .5 4"/><path d="M3 22v-6h6"/></svg>
+                拖延洞察
+              </span>
+              <span class="block-sub">本月</span>
+            </div>
+            <div class="defer-stats">
+              <div class="defer-stat"><div class="dn num">9</div><div class="dl">顺延次数</div></div>
+              <div class="defer-stat"><div class="dn alt num">4</div><div class="dl">改期次数</div></div>
+              <div class="defer-stat"><div class="dn num" style="color:var(--text)">1</div><div class="dl">卡壳任务</div></div>
+            </div>
+            <div class="defer-bar-wrap">
+              <div class="defer-bar-row">
+                <span class="bl">顺延到次日</span>
+                <span class="defer-bar"><span class="bf" style="width:64%"></span></span>
+                <span class="bv num">9</span>
+              </div>
+              <div class="defer-bar-row">
+                <span class="bl">改期到下周</span>
+                <span class="defer-bar red"><span class="bf" style="width:28%"></span></span>
+                <span class="bv num">4</span>
+              </div>
+            </div>
+            <div class="alert warn" role="status">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span class="a-txt"><b>「整理季度计划」已顺延 4 次。</b>试试拆成更小的一步，或今天先做 10 分钟。</span>
+            </div>
+          </section>
+        </div>
+
+        <!-- ===== 5. 分享卡片 ===== -->
+        <section class="surface-card panel">
+          <div class="block-head">
+            <span class="block-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></svg>
+              分享成就卡片
+            </span>
+            <span class="block-sub">本地渲染，可导出为图片</span>
+          </div>
+          <div class="share-zone">
+            <!-- 卡面（导出示范） -->
+            <div class="share-card" role="img" aria-label="成就分享卡片：7 月完成 112 项、连续 12 天、完成率 80%">
+              <div class="sc-head">
+                <div class="sc-brand">
+                  <span class="lg"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+                  <span class="nm">Just<span> Do</span></span>
+                </div>
+                <span class="sc-period num">2026 · 7 月</span>
+              </div>
+              <div class="sc-title">我的七月成就</div>
+              <div class="sc-caption">这个月，我把想做的事一件件做完了。</div>
+              <div class="sc-stats">
+                <div class="sc-stat"><div class="sv num">112</div><div class="sl">完成任务</div></div>
+                <div class="sc-stat"><div class="sv num">12</div><div class="sl">连续天数</div></div>
+                <div class="sc-stat"><div class="sv num">80%</div><div class="sl">完成率</div></div>
+              </div>
+              <div class="sc-strip" id="hm-share" aria-hidden="true"></div>
+              <div class="sc-foot"><span>坚持 24 / 31 天</span><span>justdo.app</span></div>
+            </div>
+
+            <div class="share-actions">
+              <div class="row">
+                <button class="primary-btn" type="button">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                  导出为图片
+                </button>
+                <button class="ghost-btn" type="button" style="background:var(--nested-bg)">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                  复制卡片
+                </button>
+              </div>
+              <div class="row" style="gap:8px">
+                <span class="tag-chip">卡面 · 深色</span>
+                <span class="tag-chip">卡面 · 浅色</span>
+                <span class="tag-chip">仅数字</span>
+                <span class="tag-chip">含热力图</span>
+              </div>
+              <p class="share-note">卡片在本地由 Canvas / SVG 渲染成图片，导出前不联网、不上传任何任务内容；数字与热力图取自统一统计 selector，与页面完全一致。卡面为纯色扁平设计（无渐变），深浅两版可选。</p>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== 状态板：空数据态 + 首周边界态 ===== -->
+  <div class="states">
+    <!-- 空数据态 -->
+    <section class="surface-card panel">
+      <div class="panel-title">空数据态 · 尚无完成记录</div>
+      <div class="panel-note">全新用户或本周期无完成：数据卡归零、热力图全空、不留白屏（复用 01 / 02 空态语言）。</div>
+      <div class="mini-stat-row">
+        <div class="mini-stat"><div class="mn muted num">0</div><div class="ml">今日完成</div></div>
+        <div class="mini-stat"><div class="mn muted num">0</div><div class="ml">本周完成</div></div>
+        <div class="mini-stat"><div class="mn muted num">0</div><div class="ml">连续天数</div></div>
+      </div>
+      <div class="hm-cal compact" style="margin-bottom:16px">
+        <div class="hm-body">
+          <div class="hm-wd"><span></span><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span></div>
+          <div class="hm2" id="hm-empty" role="img" aria-label="空热力图，暂无完成记录"></div>
+        </div>
+      </div>
+      <div class="empty">
+        <div class="icon-wrap">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+        </div>
+        <div class="et">还没有成就数据</div>
+        <div class="es">完成第一个任务后，热力图、连续记录与周报会自动开始积累。</div>
+        <button class="primary-btn" style="margin-top:4px" type="button">去完成一个任务</button>
+      </div>
+    </section>
+
+    <!-- 首周边界态 -->
+    <section class="surface-card panel">
+      <div class="panel-title">首周边界态 · 刚开始使用</div>
+      <div class="panel-note">仅有本周数据：热力图只点亮最近几天，streak 与最长记录相等，周报显示起步鼓励。</div>
+      <div class="mini-stat-row">
+        <div class="mini-stat"><div class="mn num">3</div><div class="ml">今日完成</div></div>
+        <div class="mini-stat"><div class="mn num">7</div><div class="ml">本周完成</div></div>
+        <div class="mini-stat"><div class="mn num" style="color:var(--success-fg)">3</div><div class="ml">连续天数</div></div>
+      </div>
+      <div class="hm-cal compact" style="margin-bottom:16px">
+        <div class="hm-body">
+          <div class="hm-wd"><span></span><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span></div>
+          <div class="hm2" id="hm-first" role="img" aria-label="首周热力图，仅最近几天有完成记录"></div>
+        </div>
+      </div>
+      <div class="streak-main" style="margin-bottom:14px">
+        <span class="flame-pill">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+          连续 <span class="n">3</span> 天
+        </span>
+        <div class="streak-side"><span class="k">最长记录</span><span class="v">3 天</span></div>
+      </div>
+      <div class="alert info" role="status">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <span class="a-txt">本周才开始，已完成 7 项，继续保持就能解锁「七日连击」徽章。</span>
+      </div>
+    </section>
+  </div>
+
+  <div class="caption foot-note">跨端待办应用 · 统计 · 成就 · 热力图周报 · 令牌唯一事实源 DESIGN.md · 热力图 emerald 成功色阶 · 浅色/暗色成对</div>
+
+</div>
+
+<script>
+  // ===== 热力图生成（确定性：种子按日期，浅暗与多次渲染一致；仅用于设计稿渲染，不承载业务） =====
+  var TODAY = new Date(2026, 6, 25); // currentDate 2026-07-25，固定以保证截图确定
+  var COLS = 53;
+  var MONTH_NAMES = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  var LEVEL_COUNT = [0, 2, 4, 6, 9]; // 每档示意完成数，用于逐格 tooltip（色不孤用）
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function dayKey(d) {
+    return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  }
+  function levelFull(d) {
+    var r = mulberry32(dayKey(d))();
+    var dow = d.getDay();
+    if (dow === 0 || dow === 6) r *= 0.72; // 周末略浅
+    if (r < 0.34) return 0;
+    if (r < 0.52) return 1;
+    if (r < 0.71) return 2;
+    if (r < 0.87) return 3;
+    return 4;
+  }
+  function levelFirst(d) {
+    var diff = Math.round((TODAY - d) / 86400000);
+    if (diff === 0) return 3;
+    if (diff === 1) return 4;
+    if (diff === 2) return 2;
+    if (diff === 3) return 3;
+    return 0;
+  }
+
+  function buildHeatmap(gridId, monthsId, mode) {
+    var grid = document.getElementById(gridId);
+    if (!grid) return;
+    var months = monthsId ? document.getElementById(monthsId) : null;
+
+    var todayDow = TODAY.getDay();
+    var start = new Date(TODAY);
+    start.setDate(TODAY.getDate() - ((COLS - 1) * 7 + todayDow)); // 对齐到最左列的周日
+
+    var lastMonth = -1;
+    for (var c = 0; c < COLS; c++) {
+      // 月份标签：以该列周日所在月份为准，月份切换时打点
+      var topDate = new Date(start);
+      topDate.setDate(start.getDate() + c * 7);
+      var m = topDate.getMonth();
+      if (months && m !== lastMonth && c < COLS - 1) {
+        var lab = document.createElement('span');
+        lab.textContent = MONTH_NAMES[m];
+        lab.style.gridColumnStart = (c + 1);
+        lab.style.gridColumnEnd = 'span 4';
+        months.appendChild(lab);
+        lastMonth = m;
+      }
+      for (var r = 0; r < 7; r++) {
+        var d = new Date(start);
+        d.setDate(start.getDate() + c * 7 + r);
+        var cell = document.createElement('div');
+        if (d > TODAY) { cell.className = 'hm-cell hm-future'; grid.appendChild(cell); continue; }
+        var lvl = 0;
+        if (mode === 'full') lvl = levelFull(d);
+        else if (mode === 'first') lvl = levelFirst(d);
+        // mode === 'empty' → 0
+        cell.className = 'hm-cell l' + lvl;
+        var cnt = LEVEL_COUNT[lvl];
+        cell.setAttribute('title', (d.getMonth() + 1) + '月' + d.getDate() + '日 · ' + (lvl === 0 ? '无完成' : cnt + ' 项完成'));
+        grid.appendChild(cell);
+      }
+    }
+  }
+
+  buildHeatmap('hm-main', 'hm-months-main', 'full');
+  buildHeatmap('hm-empty', null, 'empty');
+  buildHeatmap('hm-first', null, 'first');
+
+  // 分享卡片迷你热力条：最近 26 天
+  (function () {
+    var strip = document.getElementById('hm-share');
+    if (!strip) return;
+    var SHARE_COLORS = ['rgba(255,255,255,0.10)', '#064e3b', '#047857', '#10b981', '#6ee7b7'];
+    for (var i = 25; i >= 0; i--) {
+      var d = new Date(TODAY);
+      d.setDate(TODAY.getDate() - i);
+      var lvl = levelFull(d);
+      var c = document.createElement('span');
+      c.className = 'c';
+      c.style.background = SHARE_COLORS[lvl];
+      strip.appendChild(c);
+    }
+  })();
+</script>
+</body>
+</html>
