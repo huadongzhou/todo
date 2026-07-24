@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>月视图 · 周视图 · 时间块 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01/02 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01·02 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 侧栏 / 底衬 */
+    --nested-bg-2: #f1f5f9;    /* slate-100 更深底衬（时间轴空闲槽/表头） */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --row-divider: #f1f5f9;    /* slate-100 行/格分隔（TodoItem border-slate-100） */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --icon-muted: #94a3b8;     /* slate-400 图标默认 */
+    /* ghost 按钮（Button.vue：text-slate-600 / hover:bg-slate-100 / hover:text-slate-950） */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（DESIGN.md 语义色，浅色「100 底 + 700 字」；与 01·02 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700（今日高亮 + 品牌） */
+    /* 语义描边点（实心圆点，取语义前景色的实心档） */
+    --dot-overdue: #dc2626; /* red-600 */
+    --dot-soon: #d97706;    /* amber-600 */
+    --dot-normal: #94a3b8;  /* slate-400 */
+    --dot-success: #059669; /* emerald-600 */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --nested-bg-2: #1e293b;    /* slate-800 更深底衬 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --border: #1e293b;         /* slate-800 */
+    --row-divider: #1e293b;    /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --icon-muted: #94a3b8;     /* slate-400 */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+    --dot-overdue: #f87171; /* red-400 */
+    --dot-soon: #fbbf24;    /* amber-400 */
+    --dot-normal: #64748b;  /* slate-500 */
+    --dot-success: #34d399; /* emerald-400 */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+  .panel { padding: 24px; margin-bottom: 28px; }
+
+  /* ===== 抬头（与 01·02 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 24px; line-height: 1.25; font-weight: 600; margin: 0; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* 区块抬头（与 01 section-title 同款） */
+  .section-title { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .section-title .idx {
+    font-size: 12px; font-weight: 600; color: #fff; background: #0ea5e9;
+    border-radius: 6px; padding: 2px 8px; letter-spacing: 0.04em;
+  }
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+  .src-note {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text-secondary); margin-bottom: 18px;
+  }
+  .src-note svg { flex: none; color: var(--icon-muted); }
+  .src-note b { color: var(--text); font-weight: 600; }
+
+  /* 视图容器头（月份/周次切换条） */
+  .view-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    flex-wrap: wrap; margin-bottom: 16px;
+  }
+  .nav-cluster { display: flex; align-items: center; gap: 8px; }
+  .nav-arrow {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card-bg); color: var(--text-secondary); cursor: pointer;
+  }
+  .nav-title { font-size: 18px; font-weight: 600; min-width: 168px; text-align: center; }
+  .btn-today {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card-bg); color: var(--ghost-text);
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .cfg-note {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; padding: 5px 10px; border-radius: 9999px;
+    background: var(--info-bg); color: var(--info-fg); font-weight: 500;
+  }
+  .cfg-note svg { flex: none; }
+
+  /* 语义图例（复用语义色令牌） */
+  .legend { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
+  /* ===== 月视图 ===== */
+  .month { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); background: var(--nested-bg); }
+  .weekday-row .wd {
+    padding: 10px 0; text-align: center; font-size: 12px; font-weight: 600;
+    color: var(--text-secondary); border-bottom: 1px solid var(--border);
+  }
+  .weekday-row .wd.we { color: var(--icon-muted); } /* 周末列头稍弱 */
+  .month-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+  .mcell {
+    min-height: 116px; padding: 6px 7px 8px; background: var(--card-bg);
+    border-right: 1px solid var(--row-divider); border-bottom: 1px solid var(--row-divider);
+    display: flex; flex-direction: column; gap: 4px; overflow: hidden;
+  }
+  .mcell:nth-child(7n) { border-right: none; }
+  .month-grid > .mcell:nth-last-child(-n+7) { border-bottom: none; }
+  .mcell.other { background: var(--nested-bg); }
+  .mcell.other .dnum { color: var(--icon-muted); }
+  .mcell .dhead { display: flex; align-items: center; justify-content: space-between; }
+  .dnum { font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; padding: 3px; }
+  .mcell.today .dnum {
+    background: #0ea5e9; color: #fff; border-radius: 9999px;
+    width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  }
+  .day-count { font-size: 11px; color: var(--icon-muted); font-variant-numeric: tabular-nums; }
+
+  .mtask {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; line-height: 1.3; padding: 2px 6px; border-radius: 6px;
+    white-space: nowrap; overflow: hidden;
+  }
+  .mtask .cdot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .mtask .ctext { overflow: hidden; text-overflow: ellipsis; }
+  .mtask.t-overdue { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .mtask.t-soon    { background: var(--soon-bg);    color: var(--soon-fg); }
+  .mtask.t-normal  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .mtask.t-done    { background: var(--success-bg); color: var(--success-fg); }
+  .mtask.t-done .ctext { text-decoration: line-through; opacity: 0.85; }
+  .mtask.t-done svg { flex: none; }
+  .mmore { font-size: 11px; font-weight: 600; color: var(--text-secondary); padding: 1px 6px; }
+
+  .month-summary {
+    display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+    margin-top: 18px; padding: 14px 18px; border-radius: 10px;
+    background: var(--nested-bg); border: 1px solid var(--border);
+  }
+  .ms-item { display: flex; flex-direction: column; gap: 2px; }
+  .ms-item .v { font-size: 20px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+  .ms-item .v.brand { color: #0ea5e9; }
+  .ms-item .k { font-size: 12px; color: var(--text-secondary); }
+  .ms-sep { width: 1px; align-self: stretch; background: var(--border); }
+
+  /* ===== 周视图 ===== */
+  .week { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .week-grid { display: grid; grid-template-columns: 48px repeat(7, 1fr); }
+  /* 表头行 */
+  .wk-corner { background: var(--nested-bg); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
+  .wk-daycol-head {
+    background: var(--nested-bg); border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--row-divider); padding: 8px 6px; text-align: center;
+  }
+  .wk-daycol-head:last-child { border-right: none; }
+  .wk-daycol-head .wd { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+  .wk-daycol-head .dd { font-size: 18px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .wk-daycol-head.today { background: var(--info-bg); }
+  .wk-daycol-head.today .wd { color: var(--info-fg); }
+  .wk-daycol-head.today .dd {
+    color: #fff; background: #0ea5e9; border-radius: 9999px;
+    width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; margin: 2px auto 0;
+  }
+  /* 分区标签列 */
+  .wk-zonelbl {
+    background: var(--nested-bg); border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--row-divider);
+    font-size: 11px; font-weight: 600; color: var(--text-secondary);
+    display: flex; align-items: flex-start; justify-content: flex-end;
+    padding: 8px 8px 0 0; text-align: right; writing-mode: horizontal-tb;
+  }
+  .wk-cell {
+    border-right: 1px solid var(--row-divider); border-bottom: 1px solid var(--row-divider);
+    padding: 6px; display: flex; flex-direction: column; gap: 5px; background: var(--card-bg);
+    min-height: 64px;
+  }
+  .wk-cell:nth-child(8n) { border-right: none; } /* 每行第 8 格（含标签列）为末列 */
+  .wk-cell.today { background: color-mix(in srgb, var(--info-bg) 40%, var(--card-bg)); }
+  .dark .wk-cell.today { background: color-mix(in srgb, var(--info-bg) 55%, var(--card-bg)); }
+  .wk-cell.timed { min-height: 150px; }
+
+  .wtask {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; line-height: 1.3; padding: 3px 7px; border-radius: 6px; white-space: nowrap; overflow: hidden;
+  }
+  .wtask .ctext { overflow: hidden; text-overflow: ellipsis; }
+  .wtask .wtime { font-variant-numeric: tabular-nums; font-weight: 600; flex: none; }
+  .wtask.t-overdue { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .wtask.t-soon    { background: var(--soon-bg);    color: var(--soon-fg); }
+  .wtask.t-normal  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .wtask.t-done    { background: var(--success-bg); color: var(--success-fg); }
+  .wtask.t-done .ctext { text-decoration: line-through; opacity: 0.85; }
+  .wtask svg { flex: none; }
+  .wempty-hint { font-size: 11px; color: var(--icon-muted); padding: 4px 2px; }
+
+  /* ===== 时间块 ===== */
+  .tb-wrap { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+  .timeline { position: relative; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--card-bg); }
+  .tl-row { display: grid; grid-template-columns: 56px 1fr; height: 56px; }
+  .tl-hour {
+    border-right: 1px solid var(--border); border-bottom: 1px solid var(--row-divider);
+    font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
+    padding: 4px 8px 0 0; text-align: right;
+  }
+  .tl-slot { border-bottom: 1px solid var(--row-divider); position: relative; }
+  .tl-body { position: absolute; left: 56px; right: 0; top: 0; bottom: 0; pointer-events: none; }
+  .tblock {
+    position: absolute; left: 8px; right: 10px; border-radius: 8px; padding: 6px 10px;
+    display: flex; flex-direction: column; gap: 2px; overflow: hidden; border: 1px solid transparent;
+  }
+  .tblock .tt { font-size: 13px; font-weight: 600; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tblock .tm { font-size: 11px; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 5px; }
+  .tblock.b-soon    { background: var(--soon-bg);    color: var(--soon-fg);    border-color: color-mix(in srgb, var(--soon-fg) 30%, transparent); }
+  .tblock.b-normal  { background: var(--normal-bg);  color: var(--normal-fg);  border-color: var(--border); }
+  .tblock.b-done    { background: var(--success-bg); color: var(--success-fg); border-color: color-mix(in srgb, var(--success-fg) 30%, transparent); }
+  .tblock.b-done .tt { text-decoration: line-through; opacity: 0.9; }
+  .tblock .tt-done-ic { display: inline-flex; }
+  .tblock.b-free {
+    background: repeating-linear-gradient(45deg, var(--nested-bg-2), var(--nested-bg-2) 8px, transparent 8px, transparent 16px);
+    border: 1px dashed var(--border); color: var(--text-secondary); align-items: center; justify-content: center; flex-direction: row; gap: 6px;
+  }
+  .tblock.b-free .tt { font-weight: 500; font-size: 12px; }
+
+  /* 未排期待拖入区 */
+  .unsched { display: flex; flex-direction: column; gap: 12px; }
+  .unsched-head { display: flex; align-items: center; gap: 8px; }
+  .unsched-head .h { font-size: 14px; font-weight: 600; }
+  .unsched-head .c { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .drop-hint {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px;
+    background: var(--info-bg); color: var(--info-fg); font-size: 12px; line-height: 1.5;
+  }
+  .drop-hint svg { flex: none; }
+  .ucard {
+    display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card-bg); cursor: grab;
+  }
+  .ucard .grip { color: var(--icon-muted); flex: none; margin-top: 1px; cursor: grab; }
+  .ucard .u-main { min-width: 0; flex: 1; }
+  .ucard .u-title { font-size: 14px; font-weight: 500; color: var(--text); line-height: 1.3; }
+  .ucard .u-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 500; padding: 2px 6px; border-radius: 6px;
+  }
+  .badge.tnum { font-variant-numeric: tabular-nums; }
+  .badge svg { flex: none; }
+  .badge.due-overdue { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .badge.due-soon    { background: var(--soon-bg);    color: var(--soon-fg); }
+  .badge.due-normal  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .badge.est { background: var(--normal-bg); color: var(--normal-fg); }
+
+  /* 空态（复用 01·02 empty 语言） */
+  .states-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  .sub { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .sub-note { font-size: 12px; color: var(--text-secondary); margin: 0 0 16px; }
+  .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 26px 16px; }
+  .empty .icon-wrap { color: var(--text-secondary); opacity: 0.7; }
+  .empty .et { font-size: 15px; font-weight: 600; }
+  .empty .es { font-size: 13px; color: var(--text-secondary); max-width: 240px; line-height: 1.5; }
+  .empty .btn-today { margin-top: 4px; }
+
+  .foot-note { text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>月视图 · 周视图 · 时间块</h1>
+      <p class="lead">视图与统计 04/05/13 · 月历分布 + 一周七列 + 今日时间轴 · 数字与统计单源 · 浅色与暗色成对</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <!-- ===== 视图 01 · 月视图 ===== -->
+  <section class="surface-card panel">
+    <div class="section-title"><span class="idx">视图 01</span><h2>月视图</h2></div>
+    <div class="src-note">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      <span>数据源：<b>统计 selector</b>（视图与统计/03 统一口径）· 列表 / 成就页 / 月历 / 周视图 / 卡片同源，视图不自算</span>
+    </div>
+
+    <div class="view-head">
+      <div class="nav-cluster">
+        <button class="nav-arrow" type="button" aria-label="上个月">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <span class="nav-title num">2026 年 7 月</span>
+        <button class="nav-arrow" type="button" aria-label="下个月">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <button class="btn-today" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          回今天
+        </button>
+      </div>
+      <div class="head-right">
+        <span class="cfg-note">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+          周起始：周一 · 可在设置调整
+        </span>
+      </div>
+    </div>
+
+    <div class="month">
+      <!-- 周一起始（契约 Weekday 排列 WKST=MO）；周末列头稍弱 -->
+      <div class="weekday-row">
+        <div class="wd">一</div><div class="wd">二</div><div class="wd">三</div>
+        <div class="wd">四</div><div class="wd">五</div><div class="wd we">六</div><div class="wd we">日</div>
+      </div>
+      <div class="month-grid">
+        <!-- 第 1 行：6/29–7/5（含上月尾） -->
+        <div class="mcell other"><div class="dhead"><span class="dnum num">29</span></div></div>
+        <div class="mcell other"><div class="dhead"><span class="dnum num">30</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">1</span></div>
+          <div class="mtask t-normal"><span class="cdot" style="background:var(--dot-normal)"></span><span class="ctext">团队周会纪要</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">2</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">3</span></div>
+          <div class="mtask t-done"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="ctext">季度目标复盘</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">4</span></div></div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">5</span></div></div>
+
+        <!-- 第 2 行：7/6–7/12 -->
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">6</span><span class="day-count num">2</span></div>
+          <div class="mtask t-normal"><span class="cdot" style="background:var(--dot-normal)"></span><span class="ctext">整理需求文档</span></div>
+          <div class="mtask t-done"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="ctext">阅读 30 分钟</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">7</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">8</span></div>
+          <div class="mtask t-done"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="ctext">阅读 30 分钟</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">9</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">10</span></div>
+          <div class="mtask t-normal"><span class="cdot" style="background:var(--dot-normal)"></span><span class="ctext">客户回访电话</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">11</span></div></div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">12</span></div></div>
+
+        <!-- 第 3 行：7/13–7/19 -->
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">13</span></div>
+          <div class="mtask t-done"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="ctext">阅读 30 分钟</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">14</span></div></div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">15</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">16</span></div>
+          <div class="mtask t-normal"><span class="cdot" style="background:var(--dot-normal)"></span><span class="ctext">设计走查会议</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">17</span></div></div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">18</span></div></div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">19</span></div></div>
+
+        <!-- 第 4 行：7/20–7/26（含今日 25、逾期 22/24） -->
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">20</span></div>
+          <div class="mtask t-done"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="ctext">阅读 30 分钟</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">21</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">22</span></div>
+          <div class="mtask t-overdue"><span class="cdot" style="background:var(--dot-overdue)"></span><span class="ctext">提交季度预算表</span></div>
+        </div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">23</span></div>
+          <div class="mtask t-done"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="ctext">晨间站会记录</span></div>
+        </div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">24</span></div>
+          <div class="mtask t-overdue"><span class="cdot" style="background:var(--dot-overdue)"></span><span class="ctext">回复合作邮件</span></div>
+        </div>
+        <!-- 今日：多任务折叠 +2 -->
+        <div class="mcell today">
+          <div class="dhead"><span class="dnum num">25</span><span class="day-count num">4</span></div>
+          <div class="mtask t-soon"><span class="cdot" style="background:var(--dot-soon)"></span><span class="ctext">完成产品评审</span></div>
+          <div class="mtask t-normal"><span class="cdot" style="background:var(--dot-normal)"></span><span class="ctext">阅读 30 分钟</span></div>
+          <div class="mmore num">+2 更多</div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">26</span></div></div>
+
+        <!-- 第 5 行：7/27–8/2（含下月头） -->
+        <div class="mcell"><div class="dhead"><span class="dnum num">27</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">28</span></div>
+          <div class="mtask t-normal"><span class="cdot" style="background:var(--dot-normal)"></span><span class="ctext">整理设计走查清单</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">29</span></div></div>
+        <div class="mcell">
+          <div class="dhead"><span class="dnum num">30</span></div>
+          <div class="mtask t-normal"><span class="cdot" style="background:var(--dot-normal)"></span><span class="ctext">发布 v1 上线公告</span></div>
+        </div>
+        <div class="mcell"><div class="dhead"><span class="dnum num">31</span></div></div>
+        <div class="mcell other"><div class="dhead"><span class="dnum num">1</span></div></div>
+        <div class="mcell other"><div class="dhead"><span class="dnum num">2</span></div></div>
+      </div>
+    </div>
+
+    <!-- 语义图例 + 折叠说明 -->
+    <div class="legend">
+      <span class="legend-item"><span class="legend-dot" style="background:var(--dot-overdue)"></span>逾期（红）</span>
+      <span class="legend-item"><span class="legend-dot" style="background:var(--dot-soon)"></span>今天到期（琥珀）</span>
+      <span class="legend-item"><span class="legend-dot" style="background:var(--dot-normal)"></span>常规（slate）</span>
+      <span class="legend-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--success-fg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>已完成（emerald + 删除线）</span>
+      <span class="legend-item"><b style="color:var(--text)">+N</b>&nbsp;当日任务过多时折叠，点开看全部</span>
+    </div>
+
+    <!-- 月度汇总（数字来自统计 selector，非本视图自算） -->
+    <div class="month-summary">
+      <div class="ms-item"><span class="v num">24</span><span class="k">本月任务</span></div>
+      <div class="ms-sep"></div>
+      <div class="ms-item"><span class="v num">11</span><span class="k">已完成</span></div>
+      <div class="ms-sep"></div>
+      <div class="ms-item"><span class="v num">2</span><span class="k">逾期</span></div>
+      <div class="ms-sep"></div>
+      <div class="ms-item"><span class="v brand num">46%</span><span class="k">完成率</span></div>
+      <div class="ms-item" style="margin-left:auto"><span class="caption">同「本月」口径直读统计 selector，与成就页数字一致</span></div>
+    </div>
+  </section>
+
+  <!-- ===== 视图 02 · 周视图 ===== -->
+  <section class="surface-card panel">
+    <div class="section-title"><span class="idx">视图 02</span><h2>周视图</h2></div>
+    <div class="src-note">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      <span>数据源：<b>统计 selector</b> · 周起点由「周起始日」偏好决定（外观与设置/02），改偏好后本视图与周报起点即时变化</span>
+    </div>
+
+    <div class="view-head">
+      <div class="nav-cluster">
+        <button class="nav-arrow" type="button" aria-label="上一周">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <span class="nav-title num">7 月 20 日 – 26 日</span>
+        <button class="nav-arrow" type="button" aria-label="下一周">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <button class="btn-today" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          回本周
+        </button>
+      </div>
+      <div class="head-right">
+        <span class="cfg-note">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+          周起始：周一（可切周日）
+        </span>
+      </div>
+    </div>
+
+    <div class="week">
+      <div class="week-grid">
+        <!-- 表头行：左上角 + 7 天 -->
+        <div class="wk-corner"></div>
+        <div class="wk-daycol-head"><div class="wd">周一</div><div class="dd num">20</div></div>
+        <div class="wk-daycol-head"><div class="wd">周二</div><div class="dd num">21</div></div>
+        <div class="wk-daycol-head"><div class="wd">周三</div><div class="dd num">22</div></div>
+        <div class="wk-daycol-head"><div class="wd">周四</div><div class="dd num">23</div></div>
+        <div class="wk-daycol-head"><div class="wd">周五</div><div class="dd num">24</div></div>
+        <div class="wk-daycol-head today"><div class="wd">周六</div><div class="dd num">25</div></div>
+        <div class="wk-daycol-head"><div class="wd">周日</div><div class="dd num">26</div></div>
+
+        <!-- 全天区 -->
+        <div class="wk-zonelbl">全天</div>
+        <div class="wk-cell"><span class="wempty-hint">—</span></div>
+        <div class="wk-cell"><span class="wempty-hint">—</span></div>
+        <div class="wk-cell"><span class="wempty-hint">—</span></div>
+        <div class="wk-cell">
+          <div class="wtask t-normal"><span class="ctext">整理设计走查清单</span></div>
+        </div>
+        <div class="wk-cell"><span class="wempty-hint">—</span></div>
+        <div class="wk-cell today">
+          <div class="wtask t-soon"><span class="ctext">完成产品评审并同步团队</span></div>
+        </div>
+        <div class="wk-cell"><span class="wempty-hint">休息日</span></div>
+
+        <!-- 定时区 -->
+        <div class="wk-zonelbl">定时</div>
+        <div class="wk-cell timed">
+          <div class="wtask t-normal"><span class="wtime">14:00</span><span class="ctext">阅读 30 分钟</span></div>
+        </div>
+        <div class="wk-cell timed"><span class="wempty-hint">—</span></div>
+        <div class="wk-cell timed">
+          <div class="wtask t-overdue"><span class="wtime">10:00</span><span class="ctext">提交季度预算表</span></div>
+        </div>
+        <div class="wk-cell timed">
+          <div class="wtask t-done"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="wtime">09:30</span><span class="ctext">晨间站会记录</span></div>
+        </div>
+        <div class="wk-cell timed">
+          <div class="wtask t-overdue"><span class="wtime">17:00</span><span class="ctext">回复合作邮件</span></div>
+        </div>
+        <div class="wk-cell timed today">
+          <div class="wtask t-done"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="wtime">08:30</span><span class="ctext">晨间站会记录</span></div>
+          <div class="wtask t-soon"><span class="wtime">09:00</span><span class="ctext">完成产品评审</span></div>
+          <div class="wtask t-normal"><span class="wtime">14:00</span><span class="ctext">阅读 30 分钟</span></div>
+        </div>
+        <div class="wk-cell timed"><span class="wempty-hint">—</span></div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span class="legend-item"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>全天：无具体时刻的任务（含逾期/周期）</span>
+      <span class="legend-item"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>定时：带时刻，列内按时间先后排列</span>
+      <span class="legend-item"><span class="legend-dot" style="background:var(--info-fg)"></span>今日列整列高亮</span>
+    </div>
+  </section>
+
+  <!-- ===== 视图 03 · 时间块 ===== -->
+  <section class="surface-card panel">
+    <div class="section-title"><span class="idx">视图 03</span><h2>时间块 · 今日时间轴</h2></div>
+    <div class="src-note">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      <span>时间块用任务的 <b>startsAt / endsAt</b>（时间段字段，任务管理/03）· 与任务时间段双向互通，拖入即写起止时刻</span>
+    </div>
+
+    <div class="view-head" style="margin-bottom:12px">
+      <div class="nav-cluster">
+        <span class="nav-title num" style="min-width:auto">7 月 25 日 · 周六</span>
+        <span class="cfg-note" style="background:var(--soon-bg);color:var(--soon-fg)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          今天
+        </span>
+      </div>
+    </div>
+
+    <div class="tb-wrap">
+      <!-- 时间轴 -->
+      <div class="timeline">
+        <div class="tl-row"><div class="tl-hour num">08:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">09:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">10:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">11:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">12:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">13:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">14:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">15:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">16:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">17:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">18:00</div><div class="tl-slot"></div></div>
+        <div class="tl-row"><div class="tl-hour num">19:00</div><div class="tl-slot"></div></div>
+
+        <!-- 任务时间段块：top = (起时−8)*56，height = 时长*56 -->
+        <div class="tl-body">
+          <!-- 08:30–09:00 晨间站会（已完成 emerald） top=28 h=28 -->
+          <div class="tblock b-done" style="top:28px;height:28px;">
+            <div class="tm"><span class="tt-done-ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span><span class="num">08:30 – 09:00</span></div>
+          </div>
+          <!-- 09:00–10:30 完成产品评审（今天 soon） top=56 h=84 -->
+          <div class="tblock b-soon" style="top:56px;height:84px;">
+            <div class="tt">完成产品评审并同步团队</div>
+            <div class="tm"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="num">09:00 – 10:30 · 90 分钟</span></div>
+          </div>
+          <!-- 14:00–14:30 阅读 30 分钟（normal） top=336 h=28 -->
+          <div class="tblock b-normal" style="top:336px;height:28px;">
+            <div class="tm"><span class="tt" style="font-size:12px">阅读 30 分钟</span><span class="num" style="margin-left:auto">14:00 – 14:30</span></div>
+          </div>
+          <!-- 16:00–17:00 空闲槽 top=448 h=56 -->
+          <div class="tblock b-free" style="top:448px;height:56px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            <span class="tt">16:00 空闲 · 可拖入安排</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 未排期待拖入区 -->
+      <div class="unsched">
+        <div class="unsched-head">
+          <span class="h">未排期</span>
+          <span class="c num">3 项</span>
+        </div>
+        <div class="drop-hint">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9V6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3"/><path d="m8 13 4 4 4-4"/><path d="M12 17V3"/></svg>
+          <span>拖到左侧时间轴即排入时间块，自动写回任务的起止时刻</span>
+        </div>
+
+        <div class="ucard">
+          <span class="grip" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg></span>
+          <div class="u-main">
+            <div class="u-title">提交季度预算表</div>
+            <div class="u-badges">
+              <span class="badge due-overdue"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>逾期 3 天</span>
+              <span class="badge est tnum"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>约 60 分钟</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ucard">
+          <span class="grip" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg></span>
+          <div class="u-main">
+            <div class="u-title">整理设计走查清单</div>
+            <div class="u-badges">
+              <span class="badge due-normal"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>今天</span>
+              <span class="badge est tnum"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>约 45 分钟</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ucard">
+          <span class="grip" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg></span>
+          <div class="u-main">
+            <div class="u-title">发布 v1 上线公告</div>
+            <div class="u-badges">
+              <span class="badge due-normal"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>7 月 30 日</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 空态三连 ===== -->
+  <section class="surface-card panel">
+    <div class="section-title"><span class="idx">状态</span><h2>三视图空态</h2></div>
+    <p class="sub-note" style="margin-top:6px">说明文案 + 下一步引导，不留白屏（复用 01·02 空态语言）。</p>
+    <div class="states-grid">
+      <!-- 月视图空态 -->
+      <div class="surface-card" style="background:var(--card-bg)">
+        <div style="padding:16px 16px 0"><div class="sub">月视图 · 本月无待办</div></div>
+        <div class="empty">
+          <div class="icon-wrap">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+          </div>
+          <div class="et">2026 年 7 月还没有待办</div>
+          <div class="es">在任意日期新建任务，它会按到期日出现在这里。</div>
+          <button class="btn-today" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            新建任务
+          </button>
+        </div>
+      </div>
+
+      <!-- 周视图空态 -->
+      <div class="surface-card" style="background:var(--card-bg)">
+        <div style="padding:16px 16px 0"><div class="sub">周视图 · 本周无安排</div></div>
+        <div class="empty">
+          <div class="icon-wrap">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/></svg>
+          </div>
+          <div class="et">本周暂无安排</div>
+          <div class="es">给任务设置到期日或时刻，它会分布到对应的日子与时段。</div>
+        </div>
+      </div>
+
+      <!-- 时间块空态 -->
+      <div class="surface-card" style="background:var(--card-bg)">
+        <div style="padding:16px 16px 0"><div class="sub">时间块 · 今日未排</div></div>
+        <div class="empty">
+          <div class="icon-wrap">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <div class="et">今日暂无时间块</div>
+          <div class="es">从「未排期」把任务拖入时间轴，即可安排今天的时段。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="caption foot-note">跨端待办应用 · 月视图 / 周视图 / 时间块 · 令牌唯一事实源 DESIGN.md · 数字与统计单源（统计 selector）· 浅色/暗色成对</div>
+
+</div>
+</body>
+</html>
