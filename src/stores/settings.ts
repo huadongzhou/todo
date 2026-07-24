@@ -34,6 +34,16 @@ export const useSettingsStore = defineStore("settings", () => {
   const snooze1h = ref(true);
   const snoozeTonight = ref(true);
   const snoozeTomorrow = ref(true);
+  /**
+   * Whether an overdue task keeps reminding until it is done. Off by default:
+   * renag raises repeat system notifications, more intrusive than the silent
+   * rollover, so it stays off until the user asks for it. Unlike the snooze
+   * durations above (which the reminder bar reads here in the webview), this is
+   * read natively by the reminder scheduler (`reminder_prefs.rs`) — the nag has
+   * to fire while the app is only in the tray — through the same `settings.json`
+   * this key is written to.
+   */
+  const renagOverdue = ref(false);
   const isReady = ref(false);
   const persistenceError = ref<string | null>(null);
   let unsubscribeSystemTheme: (() => void) | undefined;
@@ -62,6 +72,7 @@ export const useSettingsStore = defineStore("settings", () => {
       snooze1h.value = await loadBooleanPreference("reminder.snooze.1h", true);
       snoozeTonight.value = await loadBooleanPreference("reminder.snooze.tonight", true);
       snoozeTomorrow.value = await loadBooleanPreference("reminder.snooze.tomorrow", true);
+      renagOverdue.value = await loadBooleanPreference("reminder.renag", false);
       await applyTheme(theme.value);
       watchSystemTheme();
       writeDiagnostic("info", "Settings restored", {
@@ -73,6 +84,7 @@ export const useSettingsStore = defineStore("settings", () => {
         snooze1h: snooze1h.value,
         snoozeTonight: snoozeTonight.value,
         snoozeTomorrow: snoozeTomorrow.value,
+        renagOverdue: renagOverdue.value,
       });
     } catch {
       theme.value = "system";
@@ -83,6 +95,7 @@ export const useSettingsStore = defineStore("settings", () => {
       snooze1h.value = true;
       snoozeTonight.value = true;
       snoozeTomorrow.value = true;
+      renagOverdue.value = false;
       persistenceError.value = "设置恢复失败，已使用系统默认值。";
       // The fallback itself must never throw: `main.ts` awaits `bootstrap()`
       // before mounting, so a second failure here would take the whole UI down
@@ -199,6 +212,21 @@ export const useSettingsStore = defineStore("settings", () => {
     await persistSnoozePreference("reminder.snooze.tomorrow", enabled);
   }
 
+  async function setRenagOverdue(enabled: boolean): Promise<void> {
+    renagOverdue.value = enabled;
+    persistenceError.value = null;
+
+    try {
+      await saveBooleanPreference("reminder.renag", enabled);
+      writeDiagnostic("info", "Renag-overdue preference updated", { renagOverdue: enabled });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Renag-overdue preference could not be persisted", {
+        renagOverdue: enabled,
+      });
+    }
+  }
+
   return {
     theme,
     themeLabel,
@@ -209,6 +237,7 @@ export const useSettingsStore = defineStore("settings", () => {
     snooze1h,
     snoozeTonight,
     snoozeTomorrow,
+    renagOverdue,
     isDesktop,
     isReady,
     persistenceError,
@@ -221,5 +250,6 @@ export const useSettingsStore = defineStore("settings", () => {
     setSnooze1h,
     setSnoozeTonight,
     setSnoozeTomorrow,
+    setRenagOverdue,
   };
 });

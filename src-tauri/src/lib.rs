@@ -3,6 +3,8 @@ mod todo_db;
 // mobile process the OS suspends cannot rely on — mobile local notifications are
 // their own scheduling work (TODO.md 2.3), which will plug in here.
 #[cfg(desktop)]
+mod reminder_prefs;
+#[cfg(desktop)]
 mod reminder_scheduler;
 
 use std::io::Write as _;

@@ -23,7 +23,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 use todo_domain::reminder::{due_reminders, DueReminder};
+use todo_domain::renag::{due_renags, RenagDue};
 
+use crate::reminder_prefs;
 use crate::todo_db::TodoDb;
 
 /// How often the schedule is re-read from the database.
@@ -121,6 +123,41 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
             );
         }
     }
+
+    // Overdue renag (提醒通知/04) rides this same poll and the same send path as
+    // the reminders above: it is computed from the stored rows every tick and
+    // shown here, never sent out of band, so 勿扰时段 (05) can gate reminders and
+    // renags together by adding one silent-window check in front of the `show()`
+    // calls, with no queue of its own. The switch is read fresh from settings each
+    // poll, so turning it off stops the next tick from nagging.
+    if reminder_prefs::renag_overdue_enabled(app) {
+        // Zone offset 0 for now: the overdue anchor is read as the UTC end of the
+        // due day. That is exact for UTC and late — never early — for the primary
+        // east-of-UTC market (a task nags the morning after its day turns over),
+        // and can nag a few hours ahead of the app's own "overdue" mark for a
+        // device far west of UTC. Reading the device's real offset — which 勿扰
+        // (05) and 晨间摘要 (06) also need for a local window and a local time — is
+        // 时区策略 (07): it feeds the offset through `reminder_prefs` and this call
+        // gains its argument, with no change to the rule.
+        for renag in due_renags(&todos, &delivered, now_unix, 0) {
+            let (title, body) = renag_notification_text(&renag);
+            if let Err(error) = app.notification().builder().title(title).body(body).show() {
+                log::warn!(
+                    "Overdue renag for todo {} could not be shown: {error}",
+                    renag.todo_id
+                );
+            }
+            // Recorded like a reminder: the synthetic nag key stands in for a
+            // `reminder_at`, so a nag that has gone out is not raised again by a
+            // later poll or after a restart.
+            if let Err(error) = db.record_reminder_delivery(&renag.todo_id, &renag.reminder_at) {
+                log::warn!(
+                    "Overdue renag delivery for todo {} could not be recorded: {error}",
+                    renag.todo_id
+                );
+            }
+        }
+    }
 }
 
 /// The toast a due reminder becomes — the native twin of the webview's old text.
@@ -139,6 +176,20 @@ fn notification_text(reminder: &DueReminder) -> (String, String) {
         Some(due_date) => format!("截止日：{due_date}"),
         None => "提醒时间到了".to_owned(),
     };
+    (title, body)
+}
+
+/// The toast an overdue renag becomes (提醒通知/04).
+///
+/// Worded to read as its own kind of notification, not the deadline reminder
+/// again and not 01's `【逾期】` catch-up (which means "this reminder went out
+/// late"): a renag means "the deadline passed and the task is still open, here is
+/// another nudge". The body names how long it has been overdue and says plainly
+/// how to make it stop — completing the task — which is the one line that keeps a
+/// repeat notification from feeling like it can never be silenced.
+fn renag_notification_text(renag: &RenagDue) -> (String, String) {
+    let title = format!("逾期未完成 · {}", renag.title);
+    let body = format!("已逾期 {} 天，完成后不再提醒。", renag.days_overdue);
     (title, body)
 }
 
@@ -182,5 +233,21 @@ mod tests {
         assert_eq!(title, "买牛奶");
         assert!(!title.contains("逾期"));
         assert_eq!(body, "提醒时间到了");
+    }
+
+    #[test]
+    fn an_overdue_renag_reads_as_its_own_notification() {
+        // Distinct from the deadline reminder and from 01's `【逾期】` catch-up: it
+        // names the task, says how long it is overdue, and tells the user how to
+        // stop it.
+        let renag = RenagDue {
+            todo_id: "a".to_owned(),
+            title: "交周报".to_owned(),
+            reminder_at: "renag:1784908800".to_owned(),
+            days_overdue: 3,
+        };
+        let (title, body) = renag_notification_text(&renag);
+        assert_eq!(title, "逾期未完成 · 交周报");
+        assert_eq!(body, "已逾期 3 天，完成后不再提醒。");
     }
 }

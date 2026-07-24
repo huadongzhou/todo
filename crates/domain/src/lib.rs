@@ -6,6 +6,7 @@ pub mod ics;
 mod lunar;
 pub mod recurrence;
 pub mod reminder;
+pub mod renag;
 
 pub use todo_contracts::SyncCursor;
 

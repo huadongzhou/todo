@@ -490,6 +490,29 @@ async function duplicateTodo(id: string): Promise<void> {
         >
           提醒
         </legend>
+        <!--
+          Renag rides at the top of the group, above the snooze durations: it is
+          the reminder behaviour a user reaches for first, and it stays off by
+          default, so its description is where they learn what it does and how to
+          stop it. No `isDesktop` gate, same as the group's other rows.
+        -->
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.renagOverdue"
+            @change="settingsStore.setRenagOverdue(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100"
+              >逾期未完成时持续提醒</span
+            >
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >任务过了截止日仍未完成时再次提醒：首日提醒数次，之后每天一次，完成任务即停止。</span
+            >
+          </span>
+        </label>
         <p class="mb-3 px-3 text-xs text-slate-500 dark:text-slate-400">
           以下时长会作为“稍后提醒”的快捷选项。
         </p>
