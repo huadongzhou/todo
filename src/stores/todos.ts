@@ -1,6 +1,6 @@
 import { computed, ref, toRaw } from "vue";
 import { defineStore } from "pinia";
-import type { RecurrenceRule, Subtask, Todo } from "@/types/todo";
+import type { Attachment, RecurrenceRule, Subtask, Todo } from "@/types/todo";
 import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import type { PageAlert } from "@/lib/page-alert";
 import { daysSinceLocalDay, isOverdue, todayLocalDay } from "@/lib/dueDate";
@@ -75,6 +75,11 @@ type FieldChange = Pick<
   // (its order is its display order); the scalar edit path in `update` leaves it
   // untouched, since subtasks are edited through their own channel (`editSubtasks`).
   | "subtasks"
+  // Carried so the attachment editor can write the whole list as one array (its
+  // order is its display order); the scalar edit path in `update` leaves it
+  // untouched, since attachments are edited through their own channel
+  // (`editAttachments`).
+  | "attachments"
 >;
 
 /**
@@ -212,6 +217,30 @@ function sameSubtasks(a: readonly Subtask[], b: readonly Subtask[]): boolean {
       subtask.id === other.id &&
       subtask.title === other.title &&
       subtask.done === other.done
+    );
+  });
+}
+
+/**
+ * Whether two attachment lists carry the same references, in the same order.
+ *
+ * The attachment editor hands the whole array back on every change, so this is
+ * what keeps a no-op — removing then restoring, or any path that rebuilds the
+ * identical list — from writing it out again: an empty outbound op and an undo
+ * entry that undoes nothing the user can see (the same guard `update` gets from
+ * comparing against storage, and the twin of `sameSubtasks`). `name` is compared
+ * with `?? null` so "absent" and "explicitly null" count as the one empty state.
+ */
+function sameAttachments(a: readonly Attachment[], b: readonly Attachment[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((attachment, index) => {
+    const other = b[index];
+    return (
+      other !== undefined &&
+      attachment.id === other.id &&
+      attachment.kind === other.kind &&
+      attachment.url === other.url &&
+      (attachment.name ?? null) === (other.name ?? null)
     );
   });
 }
@@ -676,6 +705,33 @@ export const useTodoStore = defineStore("todos", () => {
       subtasks: todo.subtasks.map((subtask) => ({ ...toRaw(subtask) })),
     };
     const after: FieldChange = { subtasks: next.map((subtask) => ({ ...subtask })) };
+    if (!applyChange(id, after)) return false;
+    recordHistory({ kind: "change", id, before, after });
+    return true;
+  }
+
+  /**
+   * Writes a whole new attachment list onto one todo as a single undoable change
+   * — the twin of `editSubtasks` for files and links.
+   *
+   * Every discrete thing the user does — mounting a link or a file, removing one
+   * — is expressed the same way: the array as it should now be, handed here whole
+   * (its order is its display order). One path carries all of them through
+   * `applyChange` (memory, storage, and the outbound `attachments` patch another
+   * device converges on) and files exactly one undo entry apiece, so a single
+   * Ctrl+Z takes back one attachment action. A list equal to the one already
+   * stored writes nothing. The `before` snapshot is copied raw so the reactive row
+   * cannot change it underneath the history entry, exactly as `editSubtasks` does.
+   */
+  function editAttachments(id: string, next: readonly Attachment[]): boolean {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo) return false;
+    if (sameAttachments(todo.attachments, next)) return false;
+
+    const before: FieldChange = {
+      attachments: todo.attachments.map((attachment) => ({ ...toRaw(attachment) })),
+    };
+    const after: FieldChange = { attachments: next.map((attachment) => ({ ...attachment })) };
     if (!applyChange(id, after)) return false;
     recordHistory({ kind: "change", id, before, after });
     return true;
@@ -1293,6 +1349,7 @@ export const useTodoStore = defineStore("todos", () => {
     add,
     update,
     editSubtasks,
+    editAttachments,
     toggle,
     makeUp,
     remove,

@@ -9,6 +9,7 @@ use specta::Type;
 #[cfg(any(debug_assertions, test))]
 use specta_typescript::Typescript;
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_store::StoreExt;
 use tauri_specta::{collect_commands, Builder};
 use todo_contracts::{RecurrenceRule, Todo};
@@ -126,6 +127,53 @@ fn habit_progress(
             makeup: progress.makeup,
         })
         .map_err(|error| error.to_string())
+}
+
+/// Opens a native file picker and hands back the chosen file's path, or `null`
+/// when the user cancels. Single selection: one attachment references one file.
+///
+/// Async on purpose, so the blocking dialog runs off the main thread — a
+/// synchronous command would block the very event loop the dialog needs and
+/// deadlock. The path is the user's own choice; it is only ever stored as an
+/// attachment's location and later handed back to `open_path` to open with the
+/// default program — this process never executes it.
+#[tauri::command]
+#[specta::specta]
+async fn pick_attachment_file(app: tauri::AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .blocking_pick_file()
+        .map(|path| path.to_string())
+}
+
+/// Opens a URL in the system default browser, reporting a capturable failure
+/// rather than swallowing it.
+///
+/// The opener's free function hands the URL to the OS as a single argument (it
+/// uses `ShellExecuteW`/`xdg-open`, never `cmd /c start`), so a crafted URL
+/// cannot inject a shell command — and it needs no app state, so this command
+/// takes none. Which schemes are worth opening (`javascript:`/`data:` are
+/// refused) is the view layer's call; this only opens what it is given and
+/// returns the reason on failure so the caller can say so instead of throwing.
+#[tauri::command]
+#[specta::specta]
+fn open_url(url: String) -> Result<(), String> {
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|error| error.to_string())
+}
+
+/// Opens a file with the system default program, reporting a capturable failure.
+///
+/// The path is the one the user picked from the native dialog; the opener hands
+/// it to the OS as a single argument (no shell) to open with its default
+/// program — this code never runs it as a command. The error is returned rather
+/// than thrown so a file that has been moved or deleted degrades to a message the
+/// caller can show: the free function checks `metadata()` first, so a missing
+/// path is an `Err` before anything is launched (任务管理/11: a missing file must
+/// not crash).
+#[tauri::command]
+#[specta::specta]
+fn open_path(path: String) -> Result<(), String> {
+    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|error| error.to_string())
 }
 
 /// Applies the writes the view layer is still holding outside SQLite: todos it
@@ -333,7 +381,10 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             replay_pending_writes,
             export_calendar,
             next_occurrence,
-            habit_progress
+            habit_progress,
+            pick_attachment_file,
+            open_url,
+            open_path
         ])
         // The two contract limits a user can reach by typing, so the view layer
         // caps both inputs at the numbers the contract enforces. Sharing the
@@ -455,6 +506,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(setup_todo_db(app.handle()));
             setup_tray(app.handle());
@@ -605,6 +657,30 @@ mod tests {
 
         // An unreadable due date is an error string, not a panic.
         assert!(habit_progress(daily, "not-a-date".to_owned(), Vec::new()).is_err());
+    }
+
+    /// Opening an attachment whose file is no longer there must come back as a
+    /// capturable error, never a panic or a silent success — that is what lets
+    /// the view layer degrade a moved-or-deleted file to a message rather than
+    /// crash (任务管理/11 acceptance). The command is a one-line wrapper over
+    /// `tauri_plugin_opener::open_path`, whose no-`with` path checks `metadata()`
+    /// before launching anything, so a missing path is an `Err` and this test
+    /// opens no program.
+    #[test]
+    fn open_path_reports_a_missing_file_instead_of_launching() {
+        let missing = std::env::temp_dir().join(format!(
+            "todo-attachment-missing-{}-{:?}.txt",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        // Make certain it really is absent before asking to open it.
+        let _ = std::fs::remove_file(&missing);
+
+        let result = open_path(missing.to_string_lossy().into_owned());
+        assert!(
+            result.is_err(),
+            "opening a file that is not there must be a capturable error, got {result:?}"
+        );
     }
 
     fn frontend_bindings_path(file_name: &str) -> PathBuf {

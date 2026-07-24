@@ -22,8 +22,10 @@ specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "=0.0.12"
 tauri = { version = "2.11.1", features = ["image-png", "tray-icon"] }
 tauri-plugin-log = "2.9.0"
+tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-store = "2.4.3"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 ts-rs = "12.0.1"

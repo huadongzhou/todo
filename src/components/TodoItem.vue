@@ -4,6 +4,7 @@ import { Check, Copy, Flame, ListChecks, Repeat, SlidersHorizontal, Trash2 } fro
 import type { HabitProgress } from "@/bindings/commands";
 import Button from "@/components/ui/button/Button.vue";
 import SubtaskList from "@/components/SubtaskList.vue";
+import AttachmentList from "@/components/AttachmentList.vue";
 import TodoFields, {
   createEmptyDraft,
   draftFromTodo,
@@ -286,6 +287,15 @@ function cancel(): void {
         nor its Esc-to-cancel.
       -->
       <SubtaskList :todo="todo" />
+
+      <!--
+        The attachment region, the third sibling of the field block after the
+        checklist rather than a field in it: like the checklist it belongs to an
+        existing task (mounting a file needs a row to hang it on) and must not
+        appear in the create form. It commits its own edits straight to the store,
+        so it rides neither this form's Enter-to-save nor its Esc-to-cancel.
+      -->
+      <AttachmentList :todo="todo" />
 
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="m-0 text-xs text-slate-500 dark:text-slate-400">Enter 保存 · Esc 取消</p>

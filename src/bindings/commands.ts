@@ -73,6 +73,41 @@ export const commands = {
 	 *  `check_ins` the scheduled dates already checked, both local `YYYY-MM-DD`.
 	 */
 	habitProgress: (rule: RecurrenceRule_Deserialize, dueDate: string, checkIns: string[]) => typedError<HabitProgress, string>(__TAURI_INVOKE("habit_progress", { rule, dueDate, checkIns })),
+	/**
+	 *  Opens a native file picker and hands back the chosen file's path, or `null`
+	 *  when the user cancels. Single selection: one attachment references one file.
+	 * 
+	 *  Async on purpose, so the blocking dialog runs off the main thread — a
+	 *  synchronous command would block the very event loop the dialog needs and
+	 *  deadlock. The path is the user's own choice; it is only ever stored as an
+	 *  attachment's location and later handed back to `open_path` to open with the
+	 *  default program — this process never executes it.
+	 */
+	pickAttachmentFile: () => __TAURI_INVOKE<string | null>("pick_attachment_file"),
+	/**
+	 *  Opens a URL in the system default browser, reporting a capturable failure
+	 *  rather than swallowing it.
+	 * 
+	 *  The opener's free function hands the URL to the OS as a single argument (it
+	 *  uses `ShellExecuteW`/`xdg-open`, never `cmd /c start`), so a crafted URL
+	 *  cannot inject a shell command — and it needs no app state, so this command
+	 *  takes none. Which schemes are worth opening (`javascript:`/`data:` are
+	 *  refused) is the view layer's call; this only opens what it is given and
+	 *  returns the reason on failure so the caller can say so instead of throwing.
+	 */
+	openUrl: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_url", { url })),
+	/**
+	 *  Opens a file with the system default program, reporting a capturable failure.
+	 * 
+	 *  The path is the one the user picked from the native dialog; the opener hands
+	 *  it to the OS as a single argument (no shell) to open with its default
+	 *  program — this code never runs it as a command. The error is returned rather
+	 *  than thrown so a file that has been moved or deleted degrades to a message the
+	 *  caller can show: the free function checks `metadata()` first, so a missing
+	 *  path is an `Err` before anything is launched (任务管理/11: a missing file must
+	 *  not crash).
+	 */
+	openPath: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_path", { path })),
 };
 
 /* Constants */
