@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>设置面板 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01/02 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01 / 02 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 分段/衬底 */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --row-hover: #f8fafc;      /* slate-50 行 hover（App.vue hover:bg-slate-50） */
+    --input-bg: #f1f5f9;       /* slate-100 填充式输入底（App.vue border-0 bg-slate-100） */
+    --control-off: #cbd5e1;    /* slate-300 复选框/单选 关闭态描边 */
+    --icon-muted: #94a3b8;     /* slate-400 图标默认（text-slate-400） */
+    --icon-hover: #020617;     /* slate-950 图标 hover */
+    --scrim: rgba(2,6,23,0.55);/* 遮罩 40–60% 黑（DESIGN 弹层基准） */
+    /* ghost 按钮（Button.vue：text-slate-600 / hover:bg-slate-100 / hover:text-slate-950） */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（DESIGN.md 语义色，浅色「100 底 + 700 字」；与 01/02 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700 */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --border: #1e293b;         /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --row-hover: #0f172a;      /* slate-900（dark:hover:bg-slate-900） */
+    --input-bg: #0f172a;       /* slate-900（dark:bg-slate-900） */
+    --control-off: #334155;    /* slate-700 */
+    --icon-muted: #94a3b8;     /* slate-400 */
+    --icon-hover: #f8fafc;     /* slate-100 */
+    --scrim: rgba(0,0,0,0.62); /* 暗色遮罩加深，保证前景隔离 */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+
+  /* ===== 抬头（与 01/02 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* ===== 弹层舞台：遮罩 + 底层应用剪影 ===== */
+  .stage {
+    position: relative; border-radius: 12px; overflow: hidden;
+    border: 1px solid var(--border); margin-bottom: 24px;
+    padding: 40px 40px 44px;
+  }
+  /* 底层应用剪影（低对比，仅示意弹层浮于主界面之上） */
+  .backdrop-app { position: absolute; inset: 0; display: flex; background: var(--card-bg); }
+  .bd-side { width: 240px; flex: none; background: var(--nested-bg); border-right: 1px solid var(--border); padding: 20px 16px; }
+  .bd-block { border-radius: 8px; background: var(--border); }
+  .bd-main { flex: 1; padding: 22px 26px; display: flex; flex-direction: column; gap: 14px; }
+  .bd-row { height: 52px; border-radius: 10px; border: 1px solid var(--border); background: var(--card-bg); }
+  .scrim { position: absolute; inset: 0; background: var(--scrim); }
+
+  /* ===== 对话框 ===== */
+  .dialog {
+    position: relative; width: 1048px; max-width: 100%; margin: 0 auto;
+  }
+  .dialog-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 22px 24px; border-bottom: 1px solid var(--border);
+  }
+  .dialog-title { font-size: 18px; font-weight: 600; margin: 0; color: var(--text); }
+  .dialog-sub { font-size: 14px; line-height: 1.5; color: var(--text-secondary); margin: 4px 0 0; }
+  .head-right { display: flex; align-items: center; gap: 10px; flex: none; }
+  .esc-hint { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+
+  .dialog-body {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
+    padding: 24px; align-items: start;
+  }
+  .col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+
+  .dialog-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 16px 24px; border-top: 1px solid var(--border);
+  }
+  .foot-note { font-size: 12px; color: var(--text-secondary); }
+
+  /* ===== fieldset 分组 ===== */
+  fieldset { margin: 0; border: 0; padding: 0; min-width: 0; }
+  .legend { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .legend .lg-ic { color: var(--text-secondary); flex: none; }
+  .legend .lg-txt { font-size: 14px; font-weight: 600; color: var(--text); }
+  .ref-tag {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500;
+    padding: 2px 8px; border-radius: 9999px; background: var(--normal-bg); color: var(--normal-fg);
+  }
+
+  /* 设置行（复刻 App.vue：flex + gap12 + min-h44 + hover 底） */
+  .set-row {
+    display: flex; align-items: flex-start; gap: 12px; min-height: 44px;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  }
+  .set-row.hovered { background: var(--row-hover); }
+  .set-text { min-width: 0; }
+  .set-title { display: block; font-size: 14px; font-weight: 500; color: var(--text); }
+  .set-desc { display: block; font-size: 12px; line-height: 1.5; color: var(--text-secondary); margin-top: 2px; }
+  .group-note { font-size: 12px; line-height: 1.5; color: var(--text-secondary); padding: 0 10px; margin: 4px 0 8px; }
+  .sub-label {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.03em; color: var(--text-secondary);
+    padding: 0 10px; margin: 12px 0 6px; border-top: 1px solid var(--border); padding-top: 14px;
+  }
+
+  /* 复选框（逐字复用 01 .cbx：brand 填充 + 白色对勾） */
+  .cbx { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; border: 1.5px solid var(--control-off); background: var(--card-bg); flex: none; margin-top: 1px; }
+  .cbx.checked { background: #0ea5e9; border-color: #0ea5e9; }
+  .cbx svg { color: #fff; display: none; }
+  .cbx.checked svg { display: block; }
+
+  /* 单选（派生自 01 复选框令牌：圆形 + brand 描边 + brand 圆点） */
+  .rdo { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--control-off); background: var(--card-bg); flex: none; margin-top: 1px; }
+  .rdo.checked { border-color: #0ea5e9; }
+  .rdo .dot { width: 10px; height: 10px; border-radius: 50%; background: #0ea5e9; display: none; }
+  .rdo.checked .dot { display: block; }
+
+  /* 焦点环（01 focus-ring） */
+  .is-focus { box-shadow: 0 0 0 2px var(--ring-offset), 0 0 0 4px #0ea5e9; }
+
+  /* 分段控件（逐字复用 02 .segmented / .seg） */
+  .segmented { display: inline-flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--nested-bg); }
+  .seg {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 40px; padding: 6px 16px; border-radius: 6px; border: none;
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+    background: transparent; color: var(--text-secondary);
+  }
+  .seg.active { background: var(--card-bg); color: var(--text); box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+  .dark .seg.active { background: #1e293b; } /* 暗色活动段用 slate-800 抬升 */
+
+  /* 时间输入（复刻 App.vue：border-0 bg-slate-100，rounded-lg，≥44px） */
+  .time-field { min-width: 0; }
+  .time-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+  .time-input {
+    display: inline-flex; align-items: center; gap: 8px;
+    width: 100%; min-height: 44px; border: none; border-radius: 8px;
+    background: var(--input-bg); color: var(--text);
+    font-family: inherit; font-size: 14px; padding: 10px 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .time-input svg { color: var(--icon-muted); flex: none; }
+  .time-input .val { color: var(--text); }
+  .time-grid { display: flex; gap: 16px; padding: 4px 10px 2px; }
+  .time-grid .time-field { flex: 1; }
+  .time-single { padding: 4px 10px 2px; max-width: 240px; }
+
+  /* 快捷键行 */
+  .sc-row {
+    display: flex; align-items: center; gap: 12px; min-height: 44px;
+    padding: 8px 10px; border-radius: 8px;
+  }
+  .sc-row.hovered { background: var(--row-hover); }
+  .sc-name { flex: 1; min-width: 0; font-size: 14px; color: var(--text); }
+  .sc-keys { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+    border-radius: 6px; padding: 3px 7px; min-width: 22px; text-align: center; line-height: 1;
+  }
+  .kbd-plus { color: var(--text-secondary); font-size: 11px; }
+  .sc-edit {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer; flex: none;
+  }
+  .sc-edit.hovered { background: var(--ghost-hover-bg); color: var(--icon-hover); }
+  /* 捕获中输入态 */
+  .sc-capture {
+    display: inline-flex; align-items: center; gap: 8px; flex: none;
+    min-height: 32px; padding: 4px 12px; border-radius: 8px;
+    border: 1px solid #0ea5e9; background: var(--card-bg);
+    font-size: 12px; color: var(--info-fg);
+  }
+  .sc-capture .rec { width: 8px; height: 8px; border-radius: 50%; background: #0ea5e9; flex: none; }
+
+  /* 按钮（01 .btn） */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border-radius: 8px; padding: 8px 16px; font-size: 14px; font-weight: 500;
+    border: none; cursor: pointer; font-family: inherit;
+  }
+  .btn-default { background: #0ea5e9; color: #ffffff; }
+  .btn-ghost { background: transparent; color: var(--ghost-text); }
+  .btn-ghost.hovered { background: var(--ghost-hover-bg); color: var(--ghost-hover-text); }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer; flex: none;
+  }
+  .icon-btn.hovered { background: var(--ghost-hover-bg); color: var(--icon-hover); }
+
+  /* 状态说明行 */
+  .status-line { font-size: 12px; color: var(--text-secondary); padding: 6px 10px 0; }
+
+  /* 待决 / 设计说明（01 .pending 同款，amber 语义） */
+  .notes { margin-top: 8px; }
+  .pending {
+    display: flex; gap: 12px; margin-top: 12px; padding: 12px 16px; border-radius: 8px;
+    background: var(--soon-bg); border: 1px solid rgba(180,83,9,0.25);
+  }
+  .dark .pending { border-color: rgba(252,211,77,0.25); }
+  .pending svg { color: var(--soon-fg); flex: none; margin-top: 1px; }
+  .pending .txt { font-size: 12px; line-height: 1.55; color: var(--soon-fg); }
+  .pending .txt b { font-weight: 700; }
+  .legend-note {
+    display: flex; gap: 12px; margin-top: 12px; padding: 12px 16px; border-radius: 8px;
+    background: var(--info-bg); color: var(--info-fg);
+  }
+  .legend-note svg { flex: none; margin-top: 1px; }
+  .legend-note .txt { font-size: 12px; line-height: 1.55; }
+  .legend-note .txt b { font-weight: 600; }
+
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+  .foot-cap { text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>设置面板</h1>
+      <p class="lead">弹层形态 · 外观 + 快捷键 + 提醒偏好 · fieldset 分组 · 令牌唯一事实源 DESIGN.md · 浅色与暗色成对</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <!-- ===== 弹层舞台 ===== -->
+  <div class="stage">
+    <!-- 底层应用剪影（被遮罩压暗，示意设置浮于主界面之上） -->
+    <div class="backdrop-app" aria-hidden="true">
+      <div class="bd-side">
+        <div class="bd-block" style="width:120px;height:24px;margin-bottom:20px"></div>
+        <div class="bd-block" style="width:100%;height:36px;margin-bottom:20px;background:#0ea5e9;opacity:.5"></div>
+        <div class="bd-block" style="width:100%;height:28px;margin-bottom:10px"></div>
+        <div class="bd-block" style="width:100%;height:28px;margin-bottom:10px"></div>
+        <div class="bd-block" style="width:100%;height:28px"></div>
+      </div>
+      <div class="bd-main">
+        <div class="bd-block" style="width:180px;height:28px"></div>
+        <div class="bd-row"></div>
+        <div class="bd-row"></div>
+        <div class="bd-row"></div>
+      </div>
+    </div>
+    <div class="scrim" aria-hidden="true"></div>
+
+    <!-- 对话框 -->
+    <div class="surface-card dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" aria-describedby="dlg-sub">
+      <!-- 头部：标题 + Esc 提示 + 关闭 -->
+      <div class="dialog-head">
+        <div>
+          <h2 class="dialog-title" id="dlg-title">设置</h2>
+          <p class="dialog-sub" id="dlg-sub">个性化应用在此设备上的显示方式。更改即时生效并自动保存。</p>
+        </div>
+        <div class="head-right">
+          <span class="esc-hint"><kbd>Esc</kbd> 关闭</span>
+          <button class="icon-btn" type="button" aria-label="关闭设置">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 主体：两列 -->
+      <div class="dialog-body">
+
+        <!-- ================= 左列：外观 + 快捷键 ================= -->
+        <div class="col">
+
+          <!-- 外观 -->
+          <fieldset aria-labelledby="lg-appearance">
+            <div class="legend" id="lg-appearance">
+              <svg class="lg-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.555C21.965 6.012 17.461 2 12 2z"/></svg>
+              <span class="lg-txt">外观</span>
+            </div>
+
+            <!-- 主题三档（radio，coded） -->
+            <label class="set-row">
+              <span class="rdo"><span class="dot"></span></span>
+              <span class="set-text">
+                <span class="set-title">浅色</span>
+                <span class="set-desc">始终使用浅色界面</span>
+              </span>
+            </label>
+            <label class="set-row hovered">
+              <span class="rdo"><span class="dot"></span></span>
+              <span class="set-text">
+                <span class="set-title">深色</span>
+                <span class="set-desc">始终使用深色界面</span>
+              </span>
+            </label>
+            <label class="set-row">
+              <span class="rdo checked"><span class="dot"></span></span>
+              <span class="set-text">
+                <span class="set-title">跟随系统</span>
+                <span class="set-desc">根据设备当前主题切换</span>
+              </span>
+            </label>
+            <p class="status-line" aria-live="polite">当前：跟随系统</p>
+
+            <!-- 字号缩放（segmented，未编码·复现参照） -->
+            <div class="sub-label">显示</div>
+            <div class="set-row" style="cursor:default;align-items:flex-start">
+              <span class="set-text" style="flex:1">
+                <span class="set-title">字号缩放 <span class="ref-tag">参照</span></span>
+                <span class="set-desc">调整正文与界面文字的显示比例。</span>
+                <span class="segmented" role="group" aria-label="字号缩放" style="margin-top:10px">
+                  <button class="seg" type="button">小</button>
+                  <button class="seg active" type="button" aria-pressed="true">标准</button>
+                  <button class="seg" type="button">大</button>
+                  <button class="seg" type="button">特大</button>
+                </span>
+              </span>
+            </div>
+
+            <!-- 高对比（checkbox，未编码·复现参照） -->
+            <label class="set-row">
+              <span class="cbx"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">高对比模式 <span class="ref-tag">参照</span></span>
+                <span class="set-desc">增强文字与界面元素的对比度，提升弱视与强光下的可读性。</span>
+              </span>
+            </label>
+
+            <!-- 完成动效（checkbox，未编码·复现参照，默认开） -->
+            <label class="set-row">
+              <span class="cbx checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">完成动效 <span class="ref-tag">参照</span></span>
+                <span class="set-desc">勾选完成任务时播放轻量动画；系统开启「减少动态效果」时自动降级。</span>
+              </span>
+            </label>
+
+            <!-- 完成音效（checkbox，未编码·复现参照） -->
+            <label class="set-row">
+              <span class="cbx"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">完成音效 <span class="ref-tag">参照</span></span>
+                <span class="set-desc">勾选完成任务时播放一声轻提示音。</span>
+              </span>
+            </label>
+          </fieldset>
+
+          <!-- 快捷键面板（整组未编码·复现参照） -->
+          <fieldset aria-labelledby="lg-shortcuts">
+            <div class="legend" id="lg-shortcuts">
+              <svg class="lg-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg>
+              <span class="lg-txt">快捷键</span>
+              <span class="ref-tag">参照</span>
+            </div>
+            <p class="group-note">点击键位可自定义；与系统或其他应用冲突时以后者为准。</p>
+
+            <!-- 捕获中：正在自定义「全局快速捕获」 -->
+            <div class="sc-row hovered">
+              <span class="sc-name">全局快速捕获</span>
+              <span class="sc-capture"><span class="rec"></span>按下新的快捷键…</span>
+            </div>
+            <div class="sc-row">
+              <span class="sc-name">新建任务</span>
+              <span class="sc-keys"><kbd>Ctrl</kbd><span class="kbd-plus">+</span><kbd>N</kbd></span>
+              <button class="sc-edit" type="button" aria-label="自定义 新建任务 快捷键">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+            </div>
+            <div class="sc-row">
+              <span class="sc-name">标记完成 / 取消</span>
+              <span class="sc-keys"><kbd>Space</kbd></span>
+              <button class="sc-edit" type="button" aria-label="自定义 标记完成 快捷键">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+            </div>
+            <div class="sc-row">
+              <span class="sc-name">删除任务</span>
+              <span class="sc-keys"><kbd>Del</kbd></span>
+              <button class="sc-edit hovered" type="button" aria-label="自定义 删除任务 快捷键">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+            </div>
+            <div class="sc-row">
+              <span class="sc-name">打开设置</span>
+              <span class="sc-keys"><kbd>Ctrl</kbd><span class="kbd-plus">+</span><kbd>,</kbd></span>
+              <button class="sc-edit" type="button" aria-label="自定义 打开设置 快捷键">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+            </div>
+            <div class="sc-row">
+              <span class="sc-name">立即同步</span>
+              <span class="sc-keys"><kbd>Ctrl</kbd><span class="kbd-plus">+</span><kbd>R</kbd></span>
+              <button class="sc-edit" type="button" aria-label="自定义 立即同步 快捷键">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+            </div>
+            <div style="padding:10px 10px 0">
+              <button class="btn btn-ghost" type="button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                重置为默认
+              </button>
+            </div>
+          </fieldset>
+        </div>
+
+        <!-- ================= 右列：提醒偏好 ================= -->
+        <div class="col">
+          <fieldset aria-labelledby="lg-reminder">
+            <div class="legend" id="lg-reminder">
+              <svg class="lg-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+              <span class="lg-txt">提醒偏好</span>
+            </div>
+
+            <!-- 默认提醒时间（time，未编码·复现参照） -->
+            <div class="time-single">
+              <label class="time-label" for="default-remind">默认提醒时间 <span class="ref-tag">参照</span></label>
+              <span class="time-input" id="default-remind">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span class="val num">09:00</span>
+              </span>
+              <p class="set-desc" style="padding:6px 0 0">新任务开启提醒但未指定时间时，默认使用的时间。</p>
+            </div>
+
+            <!-- 周起始日（segmented，未编码·复现参照） -->
+            <div class="time-single" style="max-width:none">
+              <span class="time-label">周起始日 <span class="ref-tag">参照</span></span>
+              <span class="segmented" role="group" aria-label="周起始日">
+                <button class="seg" type="button">周日</button>
+                <button class="seg active" type="button" aria-pressed="true">周一</button>
+              </span>
+              <p class="set-desc" style="padding:6px 0 0">影响日历与「本周」分组的一周起点。</p>
+            </div>
+
+            <!-- 到期重催（checkbox，coded） -->
+            <div class="sub-label">通知时机</div>
+            <label class="set-row">
+              <span class="cbx"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">逾期未完成时持续提醒</span>
+                <span class="set-desc">任务过了截止日仍未完成时再次提醒：首日提醒数次，之后每天一次，完成任务即停止。</span>
+              </span>
+            </label>
+
+            <!-- 勿扰时段（checkbox，coded，开启态展开时间输入） -->
+            <label class="set-row hovered">
+              <span class="cbx checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">勿扰时段</span>
+                <span class="set-desc">开启后，静默时段内的提醒暂存不打扰，时段结束后一并补推，不会丢失。</span>
+              </span>
+            </label>
+            <div class="time-grid">
+              <div class="time-field">
+                <label class="time-label" for="quiet-start">开始</label>
+                <span class="time-input is-focus" id="quiet-start">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <span class="val num">22:00</span>
+                </span>
+              </div>
+              <div class="time-field">
+                <label class="time-label" for="quiet-end">结束</label>
+                <span class="time-input" id="quiet-end">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <span class="val num">08:00</span>
+                </span>
+              </div>
+            </div>
+            <p class="group-note" style="margin-top:6px">每天 22:00 到<b style="font-weight:600;color:var(--text)">次日</b> 08:00 静默。</p>
+
+            <!-- 晨间摘要（checkbox，coded，开启态展开时间） -->
+            <label class="set-row">
+              <span class="cbx checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">晨间摘要</span>
+                <span class="set-desc">开启后，每天早晨推送一条今日概览通知：今日到期与逾期的任务数量。</span>
+              </span>
+            </label>
+            <div class="time-single">
+              <label class="time-label" for="summary-time">推送时间</label>
+              <span class="time-input" id="summary-time">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span class="val num">09:00</span>
+              </span>
+              <p class="set-desc" style="padding:6px 0 0">每天 09:00 推送今日概览。</p>
+            </div>
+
+            <!-- snooze 四档（checkbox，coded） -->
+            <div class="sub-label">稍后提醒时长</div>
+            <p class="group-note" style="margin-top:0">以下时长会作为「稍后提醒」的快捷选项。</p>
+            <label class="set-row">
+              <span class="cbx checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">5 分钟</span>
+                <span class="set-desc">延后 5 分钟后再次提醒。</span>
+              </span>
+            </label>
+            <label class="set-row">
+              <span class="cbx checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">1 小时</span>
+                <span class="set-desc">延后 1 小时后再次提醒。</span>
+              </span>
+            </label>
+            <label class="set-row">
+              <span class="cbx checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">今晚</span>
+                <span class="set-desc">延后到今天 20:00 再次提醒（已过 20:00 时当天不提供此项）。</span>
+              </span>
+            </label>
+            <label class="set-row">
+              <span class="cbx checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+              <span class="set-text">
+                <span class="set-title">明天</span>
+                <span class="set-desc">延后到明天 09:00 再次提醒。</span>
+              </span>
+            </label>
+
+            <!-- 时区策略（radio 本地/固定，coded 语义；现状为单一 checkbox，二态等价见说明） -->
+            <div class="sub-label">时区策略</div>
+            <label class="set-row">
+              <span class="rdo checked"><span class="dot"></span></span>
+              <span class="set-text">
+                <span class="set-title">本地时间（默认）</span>
+                <span class="set-desc">换时区后，设「9:00」的提醒仍在当地 9:00 响。</span>
+              </span>
+            </label>
+            <label class="set-row">
+              <span class="rdo"><span class="dot"></span></span>
+              <span class="set-text">
+                <span class="set-title">固定时刻</span>
+                <span class="set-desc">按设定时的绝对时刻触发，换时区后响铃的当地时间随之改变。</span>
+              </span>
+            </label>
+          </fieldset>
+        </div>
+      </div>
+
+      <!-- 底部：关闭途径 -->
+      <div class="dialog-foot">
+        <span class="foot-note">更改即时生效并自动保存，无需手动确认。</span>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="esc-hint"><kbd>Esc</kbd> 关闭</span>
+          <button class="btn btn-default" type="button">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 设计说明 / DESIGN.md 缺口标注 ===== -->
+  <section class="surface-card" style="padding:20px 24px">
+    <div class="legend"><span class="lg-txt" style="font-size:16px">设计说明与令牌溯源</span></div>
+    <div class="legend-note">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      <div class="txt">
+        <b>回归基线（对齐现状代码 src/App.vue）：</b>主题三档（浅/深/跟随系统）、任务顺延、提醒组的到期重催 / 勿扰时段（起止 + 「次日」跨午夜说明）/ 晨间摘要（开关 + 时刻）/ snooze 四档 / 时区策略——文案与开关默认值逐字取自 App.vue 与 settings.ts，未引入与代码冲突的新视觉。控件外观（复选框 brand 填充 + 白勾、输入 <span class="num">border-0 bg-slate-100</span>、focus-ring、分段）逐字复用 01/02 组件与 DESIGN.md 令牌。
+      </div>
+    </div>
+    <div class="legend-note">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div class="txt">
+        <b>结构说明（不改代码，仅本稿呈现）：</b>① 单选（radio）01 未定义，此处派生自 01 复选框令牌（圆形 + brand 描边 + brand 圆点），非新增令牌。② 时区策略现状为单一 checkbox「按固定时刻触发提醒」，本稿按需求呈「本地/固定」二选一 radio（二态语义等价：本地=默认关，固定=开），文案不变——若复现需与代码严格一致则仍为 checkbox，供编排者裁决。③ 桌面行为/同步/日历三组虽在 App.vue 同一面板，但归属其他模块（同步→02、桌面→13），本屏按需求聚焦外观/快捷键/提醒，未纳入。
+      </div>
+    </div>
+    <div class="pending">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div class="txt"><b>DESIGN.md 缺口（未编码项，仅用既有令牌搭控件，底层规则待定义）：</b>「字号缩放」需定义缩放档位与作用范围（当前字号阶梯 12/14/16/18/24/32 为固定值，缩放机制未定）；「高对比模式」需定义高对比调色板（现有中性/语义色阶未含高对比变体）；「完成动效/音效」需在动效节补交互与音频规格；「快捷键」默认键位表未在 DESIGN.md/代码固化。上述均未在稿中私自造色，落地实现前请先补 DESIGN.md 并交编排者裁决。</div>
+    </div>
+  </section>
+
+  <div class="caption foot-cap">跨端待办应用 · 设置面板 · 令牌唯一事实源 DESIGN.md · 已编码项逐字复刻 App.vue/settings.ts · 浅色/暗色成对</div>
+
+</div>
+</body>
+</html>
