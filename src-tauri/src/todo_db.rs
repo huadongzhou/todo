@@ -41,7 +41,8 @@ pub struct TodoDb {
 ///   recurrence, list, Eisenhower axes, manual order, tags, subtasks,
 ///   attachments, dependencies.
 /// * 3 — archived_at, the instant a completed task was moved out of the list.
-const SCHEMA_VERSION: i64 = 3;
+/// * 4 — check_ins, the scheduled dates a daily/weekly habit was checked in on.
+const SCHEMA_VERSION: i64 = 4;
 
 const CREATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY NOT NULL,
@@ -65,7 +66,8 @@ const CREATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS todos (
     tag_ids TEXT,
     subtasks TEXT,
     attachments TEXT,
-    depends_on TEXT
+    depends_on TEXT,
+    check_ins TEXT
 )";
 
 /// Bytes of a stored value that no build can read back, kept out of the way of
@@ -115,19 +117,21 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("attachments", "TEXT"),
     ("depends_on", "TEXT"),
     ("archived_at", "TEXT"),
+    ("check_ins", "TEXT"),
 ];
 
 const SELECT_TODOS: &str = "SELECT id, title, status, created_at, completed_at, archived_at,
     due_date, reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes, recurrence,
-    list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on
+    list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on, check_ins
     FROM todos
     ORDER BY created_at DESC, id";
 
 const UPSERT_TODO: &str = "INSERT INTO todos (id, title, status, created_at, completed_at,
     archived_at, due_date, reminder_at, notes, start_date, starts_at, ends_at, estimated_minutes,
-    recurrence, list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on)
+    recurrence, list_id, important, urgent, sort_order, tag_ids, subtasks, attachments, depends_on,
+    check_ins)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-        ?20, ?21, ?22)
+        ?20, ?21, ?22, ?23)
     ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         status = excluded.status,
@@ -149,7 +153,8 @@ const UPSERT_TODO: &str = "INSERT INTO todos (id, title, status, created_at, com
         tag_ids = excluded.tag_ids,
         subtasks = excluded.subtasks,
         attachments = excluded.attachments,
-        depends_on = excluded.depends_on";
+        depends_on = excluded.depends_on,
+        check_ins = excluded.check_ins";
 
 /// Outcome of replaying the writes the view layer parked outside SQLite.
 ///
@@ -335,6 +340,7 @@ fn row_to_todo(
         subtasks: decode_json(row.get("subtasks")?, "subtasks", &id, unreadable),
         attachments: decode_json(row.get("attachments")?, "attachments", &id, unreadable),
         depends_on: decode_json(row.get("depends_on")?, "depends_on", &id, unreadable),
+        check_ins: decode_json(row.get("check_ins")?, "check_ins", &id, unreadable),
         id,
     })
 }
@@ -533,6 +539,7 @@ impl TodoDb {
                     encode_json(&todo.subtasks)?,
                     encode_json(&todo.attachments)?,
                     encode_json(&todo.depends_on)?,
+                    encode_json(&todo.check_ins)?,
                 ],
             )?;
             Ok(())
@@ -643,6 +650,7 @@ mod tests {
             subtasks: Vec::new(),
             attachments: Vec::new(),
             depends_on: Vec::new(),
+            check_ins: Vec::new(),
         }
     }
 
@@ -805,6 +813,7 @@ mod tests {
         // The fields the row predates read back empty rather than failing it.
         assert!(stored[0].tag_ids.is_empty());
         assert!(stored[0].subtasks.is_empty());
+        assert!(stored[0].check_ins.is_empty());
         assert_eq!(stored[0].important, None);
         assert_eq!(stored[0].archived_at, None);
     }
@@ -967,6 +976,7 @@ mod tests {
         stored.sort_order = Some(2.5);
         stored.tag_ids = vec!["tag-1".to_owned(), "tag-2".to_owned()];
         stored.depends_on = vec!["b".to_owned()];
+        stored.check_ins = vec!["2026-06-30".to_owned(), "2026-07-01".to_owned()];
         stored.subtasks = vec![Subtask {
             id: "step-1".to_owned(),
             title: "first step".to_owned(),
@@ -1003,6 +1013,10 @@ mod tests {
         assert_eq!(
             read_back.tag_ids,
             vec!["tag-1".to_owned(), "tag-2".to_owned()]
+        );
+        assert_eq!(
+            read_back.check_ins,
+            vec!["2026-06-30".to_owned(), "2026-07-01".to_owned()]
         );
         assert_eq!(read_back.depends_on, vec!["b".to_owned()]);
         assert_eq!(read_back.subtasks.len(), 1);

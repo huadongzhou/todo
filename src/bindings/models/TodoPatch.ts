@@ -24,4 +24,9 @@ export type TodoPatch = { title?: string, status?: TodoStatus, dueDate?: string 
  * flat option would send that restore as "unchanged" and the task would
  * stay archived on every other device.
  */
-archivedAt?: string | null, reminderAt?: string | null, notes?: string | null, startDate?: string | null, startsAt?: string | null, endsAt?: string | null, estimatedMinutes?: number | null, recurrence?: RecurrenceRule | null, listId?: string | null, important?: boolean | null, urgent?: boolean | null, sortOrder?: number | null, tagIds?: Array<string>, subtasks?: Array<Subtask>, attachments?: Array<Attachment>, dependsOn?: Array<string>, };
+archivedAt?: string | null, reminderAt?: string | null, notes?: string | null, startDate?: string | null, startsAt?: string | null, endsAt?: string | null, estimatedMinutes?: number | null, recurrence?: RecurrenceRule | null, listId?: string | null, important?: boolean | null, urgent?: boolean | null, sortOrder?: number | null, tagIds?: Array<string>, subtasks?: Array<Subtask>, attachments?: Array<Attachment>, dependsOn?: Array<string>, 
+/**
+ * The whole set of scheduled dates a habit has been checked in on, sent as
+ * one value like the tag set rather than as a diff.
+ */
+checkIns?: Array<string>, };

@@ -1490,6 +1490,7 @@ mod tests {
                 name: Some("the link".to_owned()),
             }]),
             depends_on: Some(vec!["todo-2".to_owned()]),
+            check_ins: Some(vec!["2026-07-16".to_owned()]),
         };
 
         let mut written = serde_json::to_value(&carried).expect("serialise the patch");

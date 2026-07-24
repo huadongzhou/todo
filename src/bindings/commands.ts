@@ -61,6 +61,18 @@ export const commands = {
 	 *  dates, the shape a due date is stored in.
 	 */
 	nextOccurrence: (rule: RecurrenceRule_Deserialize, anchor: string, after: string) => typedError<string | null, string>(__TAURI_INVOKE("next_occurrence", { rule, anchor, after })),
+	/**
+	 *  The streak and recent make-up days for a daily or weekly habit.
+	 * 
+	 *  Habits are shown by advancing a single row and recording each check-in's
+	 *  scheduled date rather than leaving completed siblings behind (任务管理/09), so
+	 *  the streak is not a stored number but is counted afresh from the check-in set
+	 *  over the schedule. The view layer reaches this so that counting stays in the
+	 *  one engine that reads the calendar, never a second reading in TypeScript.
+	 *  `due_date` is the task's current due date (its next occurrence) and
+	 *  `check_ins` the scheduled dates already checked, both local `YYYY-MM-DD`.
+	 */
+	habitProgress: (rule: RecurrenceRule_Deserialize, dueDate: string, checkIns: string[]) => typedError<HabitProgress, string>(__TAURI_INVOKE("habit_progress", { rule, dueDate, checkIns })),
 };
 
 /* Constants */
@@ -118,6 +130,19 @@ export type CalendarExport = {
 	path: string | null,
 	eventCount: number,
 	unrepeatableRecurrences: number,
+};
+
+/**
+ *  A habit's streak and the recent scheduled days it could still be checked in
+ *  on.
+ * 
+ *  `streak` is how many scheduled days it has been kept up in a row; `makeup` are
+ *  the recent days that fell due unchecked, most recent first, for the row's
+ *  make-up buttons. Empty for a rule that is not a daily or weekly habit.
+ */
+export type HabitProgress = {
+	streak: number,
+	makeup: string[],
 };
 
 /**
@@ -319,6 +344,18 @@ export type Todo_Deserialize = {
 	attachments?: Attachment_Deserialize[],
 	/**  Tasks that must be done before this one. */
 	dependsOn?: string[],
+	/**
+	 *  Scheduled dates (`YYYY-MM-DD`) this task has been checked in on.
+	 * 
+	 *  A daily or weekly recurring task is shown as a habit (任务管理/09): checking
+	 *  it off records the scheduled date it stood on here and advances the single
+	 *  row to its next occurrence, rather than leaving a completed sibling behind.
+	 *  The streak is a pure function of this set over the schedule — no drifting
+	 *  counter is stored anywhere. Empty for every task that is not a checked-in
+	 *  habit, so it defaults like the other list-valued fields and a payload from
+	 *  a build that never knew it reads back empty.
+	 */
+	checkIns?: string[],
 };
 
 /**
@@ -388,6 +425,18 @@ export type Todo_Serialize = {
 	attachments: Attachment_Serialize[],
 	/**  Tasks that must be done before this one. */
 	dependsOn: string[],
+	/**
+	 *  Scheduled dates (`YYYY-MM-DD`) this task has been checked in on.
+	 * 
+	 *  A daily or weekly recurring task is shown as a habit (任务管理/09): checking
+	 *  it off records the scheduled date it stood on here and advances the single
+	 *  row to its next occurrence, rather than leaving a completed sibling behind.
+	 *  The streak is a pure function of this set over the schedule — no drifting
+	 *  counter is stored anywhere. Empty for every task that is not a checked-in
+	 *  habit, so it defaults like the other list-valued fields and a payload from
+	 *  a build that never knew it reads back empty.
+	 */
+	checkIns: string[],
 };
 
 export type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Check, Copy, Repeat, SlidersHorizontal, Trash2 } from "lucide-vue-next";
+import { Check, Copy, Flame, Repeat, SlidersHorizontal, Trash2 } from "lucide-vue-next";
+import type { HabitProgress } from "@/bindings/commands";
 import Button from "@/components/ui/button/Button.vue";
 import TodoFields, {
   createEmptyDraft,
@@ -12,7 +13,14 @@ import TodoFields, {
 } from "@/components/TodoFields.vue";
 import { clearFormAlert } from "@/lib/form-alert";
 import { dueDateTone, formatDueDate, isNotStarted, TONE_LABEL_CLASS } from "@/lib/dueDate";
-import { recurrenceLabel } from "@/lib/recurrence";
+import {
+  habitProgress,
+  isHabitRule,
+  isoMonthDay,
+  makeupShortLabel,
+  recurrenceLabel,
+  streakLabel,
+} from "@/lib/recurrence";
 import { useTodoStore } from "@/stores/todos";
 import type { Todo } from "@/types/todo";
 
@@ -59,6 +67,88 @@ const detailsOpen = ref(false);
 const completed = computed(() => props.todo.status === "completed");
 /** A task whose start date has not arrived yet: set, but nothing to do about. */
 const notStarted = computed(() => isNotStarted(props.todo.startDate, completed.value));
+
+/**
+ * The repeat rule when this row is a habit (a daily or weekly one), else `null`.
+ * A habit's completion circle checks it in and the row grows a streak pill and,
+ * when recent days were missed, make-up buttons — the other frequencies keep the
+ * plain recurrence pill 08 gave them.
+ */
+const habitRule = computed(() => {
+  const rule = props.todo.recurrence;
+  return rule && isHabitRule(rule) ? rule : null;
+});
+
+/**
+ * The streak and recent make-up days for this habit, from the engine — the app's
+ * one reading of the schedule, so the row never counts it a second time here.
+ * Recomputed whenever the rule, the due date or the check-in set changes (a
+ * check-in, a make-up, a day-start advance, an inbound sync, an undo). `null`
+ * off a habit row or on a runtime with no engine (browser dev), where the row
+ * simply shows no streak or make-up.
+ */
+const progress = ref<HabitProgress | null>(null);
+/** Guards against a slower earlier lookup landing after a newer one. */
+let progressToken = 0;
+
+async function refreshProgress(): Promise<void> {
+  const rule = habitRule.value;
+  const due = props.todo.dueDate;
+  if (!rule || !due) {
+    progress.value = null;
+    return;
+  }
+  const token = ++progressToken;
+  const result = await habitProgress(rule, due, props.todo.checkIns);
+  if (token === progressToken) progress.value = result;
+}
+
+watch(
+  [() => props.todo.recurrence, () => props.todo.dueDate, () => props.todo.checkIns],
+  () => void refreshProgress(),
+  { immediate: true },
+);
+
+/** The streak count, and whether it is worth a pill (a run of one still is). */
+const streak = computed(() => progress.value?.streak ?? 0);
+const showStreak = computed(() => streak.value >= 1);
+const streakText = computed(() =>
+  habitRule.value ? streakLabel(streak.value, habitRule.value.frequency) : "",
+);
+
+/**
+ * The make-up buttons: one per recent missed day, each carrying its short face,
+ * its full accessible name and the date to write. Empty unless this is a habit
+ * with recent misses — the common, kept-up case shows only the streak pill.
+ */
+const makeupButtons = computed(() => {
+  const rule = habitRule.value;
+  if (!rule) return [];
+  return (progress.value?.makeup ?? []).map((date) => ({
+    date,
+    label: makeupShortLabel(date, rule.frequency),
+    ariaLabel: `为 ${props.todo.title} 补卡 ${isoMonthDay(date)}`,
+  }));
+});
+
+/**
+ * The completion circle's accessible name. On a habit it reads as a check-in
+ * (and its undo, on the rare completed row a habit's series end leaves), so a
+ * screen-reader user hears "打卡" rather than a plain "完成"; other rows are
+ * unchanged.
+ */
+const circleLabel = computed(() => {
+  if (habitRule.value) {
+    return completed.value ? `撤销 ${props.todo.title} 打卡` : `为 ${props.todo.title} 打卡`;
+  }
+  return completed.value ? "标记为未完成" : "标记为完成";
+});
+
+/** A make-up writes the day into history, then hands focus back to the row. */
+function makeUp(date: string): void {
+  todoStore.makeUp(props.todo.id, date);
+  void returnFocus();
+}
 
 /** Fills the draft from the stored todo whenever this row opens for editing. */
 watch(
@@ -196,7 +286,7 @@ function cancel(): void {
       <button
         class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-300 text-white focus-ring dark:border-slate-600"
         :class="completed ? 'border-sky-500 bg-sky-500' : 'bg-white dark:bg-slate-950'"
-        :aria-label="completed ? '标记为未完成' : '标记为完成'"
+        :aria-label="circleLabel"
         @click="todoStore.toggle(todo.id)"
       >
         <Check v-if="completed" :size="15" />
@@ -279,6 +369,29 @@ function cancel(): void {
             <span class="sr-only">重复规则：</span>
             {{ recurrenceLabel(todo.recurrence) }}
           </span>
+          <!--
+            Streak pill: a habit's run of kept-up days, drawn from the engine's
+            count of the check-in history (never a stored counter). A `Flame` icon
+            marks it, the words carry the meaning so it never leans on the icon,
+            and emerald is DESIGN's "success" — the two colour branches are
+            mutually exclusive and weigh the same, written here rather than in a
+            `.ts` table so UnoCSS scans the `dark:` classes (the `dueDate.ts`
+            trap). Non-interactive: no focus, no Tab stop. Absent at a streak of
+            zero — the empty state is no pill, not "连续 0 天".
+          -->
+          <span
+            v-if="showStreak"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium"
+            :class="
+              completed
+                ? 'text-slate-400 dark:text-slate-500'
+                : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+            "
+          >
+            <Flame :size="14" aria-hidden="true" />
+            <span class="sr-only">连续记录：</span>
+            {{ streakText }}
+          </span>
           <span
             v-if="notStarted"
             class="inline-block rounded-md px-1.5 py-0.5 text-xs font-medium"
@@ -287,6 +400,27 @@ function cancel(): void {
             {{ formatDueDate(todo.startDate) }}开始
           </span>
         </p>
+        <!--
+          Make-up buttons: the recent scheduled days a habit missed, offered to
+          catch up on. Their own row under the badges because a `<p>` may not hold
+          interactive controls, and only present when something recent was missed
+          — the kept-up habit shows only the streak pill above. Each is 44px tall
+          (touch floor); the label names the kind of day, the accessible name the
+          exact one. Clicking one writes that day into history and hands focus
+          back to the title, so it never falls to <body> as the button unmounts.
+        -->
+        <div v-if="makeupButtons.length" class="mt-1 flex flex-wrap gap-2">
+          <Button
+            v-for="button in makeupButtons"
+            :key="button.date"
+            variant="ghost"
+            class="min-h-11 !px-2 !py-1 text-xs text-slate-500 dark:text-slate-400 dark:hover:text-slate-100"
+            :aria-label="button.ariaLabel"
+            @click="makeUp(button.date)"
+          >
+            {{ button.label }}
+          </Button>
+        </div>
       </div>
       <!--
         Duplicating is the one of the three new abilities that has to be one

@@ -1,4 +1,5 @@
 mod civil;
+pub mod habit;
 pub mod holidays;
 pub mod ics;
 mod lunar;

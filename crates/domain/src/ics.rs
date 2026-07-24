@@ -517,6 +517,7 @@ mod tests {
             subtasks: Vec::new(),
             attachments: Vec::new(),
             depends_on: Vec::new(),
+            check_ins: Vec::new(),
         }
     }
 

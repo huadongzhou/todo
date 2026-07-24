@@ -144,6 +144,63 @@ pub fn next_occurrence(
     }))
 }
 
+/// How many occurrences one range query walks before it gives up — a guard on
+/// the walk, not a real limit. A streak counts back through a bounded history and
+/// a make-up window reaches only a handful of recent days, so a query this long
+/// is a caller asking for far more of the schedule than a habit view ever needs.
+const MAX_RANGE_OCCURRENCES: usize = 4000;
+
+/// Every occurrence of the rule from `from` to `to`, both inclusive, in order.
+///
+/// The counterpart to [`next_occurrence`] for a caller that needs a window of the
+/// schedule rather than one step of it — counting a habit's streak back through
+/// the days it fell due, or offering the recent days it could still be checked in
+/// on. It is the very forward walk [`next_occurrence`] drives, fed its own answer
+/// back as the next `after`, so a window can never read the calendar differently
+/// from a single step or from the exported file: there is one understanding of
+/// "when does this repeat", and this only bounds it.
+///
+/// `anchor` is the occurrence the rule is counted from, exactly as in
+/// [`next_occurrence`]. The walk runs forward from it, so an occurrence earlier
+/// than the anchor is never produced — a caller wanting a window that opens
+/// before the anchor passes an earlier on-grid occurrence as the anchor, and any
+/// occurrence of a daily or weekly rule is one. At most [`MAX_RANGE_OCCURRENCES`]
+/// are returned (a wider window is truncated at the far end rather than looped
+/// without end), and a rule the engine cannot answer surfaces as the same
+/// [`RecurrenceError`] a single step would raise — a lunar year past the calendar
+/// among them, so a reverse window is refused rather than guessed just as a
+/// forward step is.
+pub fn occurrences_between(
+    rule: &RecurrenceRule,
+    anchor: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<Occurrence>, RecurrenceError> {
+    let from = parse_date(from).ok_or(RecurrenceError::UnreadableDate)?;
+    let to = parse_date(to).ok_or(RecurrenceError::UnreadableDate)?;
+    if from > to {
+        return Ok(Vec::new());
+    }
+
+    // Start the walk one day before `from`: `next_occurrence` answers strictly
+    // after `after`, so this makes its first answer the first occurrence on or
+    // after `from`.
+    let mut after = format_iso_date(add_days(from, -1));
+    let mut occurrences = Vec::new();
+    while occurrences.len() < MAX_RANGE_OCCURRENCES {
+        let Some(occurrence) = next_occurrence(rule, anchor, &after)? else {
+            break;
+        };
+        let date = parse_date(&occurrence.date).ok_or(RecurrenceError::UnreadableDate)?;
+        if date > to {
+            break;
+        }
+        after.clone_from(&occurrence.date);
+        occurrences.push(occurrence);
+    }
+    Ok(occurrences)
+}
+
 /// Whether the walk to `date` read any day of a year the published arrangement
 /// does not cover.
 ///
@@ -1372,6 +1429,102 @@ mod tests {
             let gap = crate::civil::days_from_civil(later) - crate::civil::days_from_civil(earlier);
             assert!(gap == 29 || gap == 30, "{pair:?} are {gap} days apart");
         }
+    }
+
+    /// The dates a range query lands on, for the tests that only care where.
+    fn between(rule: &RecurrenceRule, anchor: &str, from: &str, to: &str) -> Vec<String> {
+        occurrences_between(rule, anchor, from, to)
+            .expect("a rule the engine can read")
+            .into_iter()
+            .map(|occurrence| occurrence.date)
+            .collect()
+    }
+
+    #[test]
+    fn a_range_lists_the_occurrences_it_spans_inclusive() {
+        // Daily, anchored before the window: the anchor is not produced, only the
+        // days inside [from, to], both ends included.
+        assert_eq!(
+            between(
+                &rule(RecurrenceFrequency::Daily),
+                "2026-07-20",
+                "2026-07-23",
+                "2026-07-26"
+            ),
+            ["2026-07-23", "2026-07-24", "2026-07-25", "2026-07-26"]
+        );
+    }
+
+    #[test]
+    fn a_range_that_ends_before_it_starts_is_empty() {
+        assert!(between(
+            &rule(RecurrenceFrequency::Daily),
+            "2026-07-20",
+            "2026-07-26",
+            "2026-07-23"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn a_weekly_range_lists_every_named_day_in_the_window() {
+        // Anchored on a past Monday, the window collects the named days that fall
+        // inside it — the shape the streak count reads back off the tail of.
+        let mut mwf = rule(RecurrenceFrequency::Weekly);
+        mwf.weekdays = vec![Weekday::Monday, Weekday::Wednesday, Weekday::Friday];
+
+        assert_eq!(
+            between(&mwf, "2026-07-20", "2026-07-27", "2026-08-03"),
+            ["2026-07-27", "2026-07-29", "2026-07-31", "2026-08-03"]
+        );
+    }
+
+    #[test]
+    fn a_range_covers_the_harder_frequencies_the_same_way_a_step_does() {
+        // Monthly, working-day and lunar all answer a window through the same
+        // forward walk, so the range is not a daily/weekly-only shortcut.
+        let mut month_end = rule(RecurrenceFrequency::Monthly);
+        month_end.on_last_day = true;
+        assert_eq!(
+            between(&month_end, "2026-01-31", "2026-02-01", "2026-04-30"),
+            ["2026-02-28", "2026-03-31", "2026-04-30"]
+        );
+
+        // Across the spring festival: the make-up Saturday works, the holiday
+        // days do not — the same arrangement a single step reads.
+        assert_eq!(
+            between(
+                &rule(RecurrenceFrequency::Workday),
+                "2026-02-13",
+                "2026-02-14",
+                "2026-02-25"
+            ),
+            ["2026-02-14", "2026-02-24", "2026-02-25"]
+        );
+
+        // A lunar monthly rule lands on the first of each lunar month; the window
+        // reads them through the calendar rather than a second copy of it.
+        assert_eq!(
+            between(
+                &lunar_rule(RecurrenceFrequency::Monthly),
+                "2026-02-17",
+                "2026-02-17",
+                "2026-05-01"
+            )
+            .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_lunar_range_past_the_calendar_is_refused_not_guessed() {
+        // 07's FIRST_YEAR..LAST_YEAR bound holds for a window too: a lunar year
+        // the calendar does not know is an error, not an answer in the wrong one.
+        let yearly = lunar_rule(RecurrenceFrequency::Yearly);
+        assert_eq!(
+            occurrences_between(&yearly, "2100-02-09", "2100-02-09", "2103-01-01"),
+            Err(RecurrenceError::LunarOutOfRange)
+        );
     }
 
     #[test]

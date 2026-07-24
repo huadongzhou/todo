@@ -113,6 +113,17 @@ pub struct Todo {
     /// Tasks that must be done before this one.
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Scheduled dates (`YYYY-MM-DD`) this task has been checked in on.
+    ///
+    /// A daily or weekly recurring task is shown as a habit (任务管理/09): checking
+    /// it off records the scheduled date it stood on here and advances the single
+    /// row to its next occurrence, rather than leaving a completed sibling behind.
+    /// The streak is a pure function of this set over the schedule — no drifting
+    /// counter is stored anywhere. Empty for every task that is not a checked-in
+    /// habit, so it defaults like the other list-valued fields and a payload from
+    /// a build that never knew it reads back empty.
+    #[serde(default)]
+    pub check_ins: Vec<String>,
 }
 
 impl Todo {
@@ -149,6 +160,11 @@ impl Todo {
         if self.depends_on.contains(&self.id) {
             return Err(ContractValidationError::SelfDependency);
         }
+
+        // Check-in dates are civil dates rather than ids, but the same three
+        // faults the id lists guard against apply to them too — too many, a
+        // blank one, or the same day recorded twice — so the same check fits.
+        validate_id_list(&self.check_ins)?;
 
         Ok(())
     }
@@ -404,6 +420,11 @@ pub struct TodoPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub depends_on: Option<Vec<String>>,
+    /// The whole set of scheduled dates a habit has been checked in on, sent as
+    /// one value like the tag set rather than as a diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub check_ins: Option<Vec<String>>,
 }
 
 impl TodoPatch {
@@ -441,6 +462,9 @@ impl TodoPatch {
         }
         if let Some(depends_on) = &self.depends_on {
             validate_id_list(depends_on)?;
+        }
+        if let Some(check_ins) = &self.check_ins {
+            validate_id_list(check_ins)?;
         }
 
         Ok(())
@@ -815,6 +839,7 @@ mod tests {
             subtasks: Vec::new(),
             attachments: Vec::new(),
             depends_on: Vec::new(),
+            check_ins: Vec::new(),
         }
     }
 
@@ -854,6 +879,7 @@ mod tests {
         assert!(decoded.subtasks.is_empty());
         assert!(decoded.attachments.is_empty());
         assert!(decoded.depends_on.is_empty());
+        assert!(decoded.check_ins.is_empty());
         assert_eq!(decoded.important, None);
         assert!(decoded.recurrence.is_none());
         assert!(decoded.archived_at.is_none());
@@ -918,6 +944,7 @@ mod tests {
         original.sort_order = Some(1.5);
         original.tag_ids = vec!["tag-1".to_owned()];
         original.depends_on = vec!["todo-2".to_owned()];
+        original.check_ins = vec!["2026-07-20".to_owned(), "2026-07-21".to_owned()];
         original.subtasks = vec![Subtask {
             id: "step-1".to_owned(),
             title: "first step".to_owned(),
@@ -950,6 +977,10 @@ mod tests {
         assert_eq!(decoded.important, Some(true));
         assert_eq!(decoded.urgent, Some(false));
         assert_eq!(decoded.tag_ids, vec!["tag-1".to_owned()]);
+        assert_eq!(
+            decoded.check_ins,
+            vec!["2026-07-20".to_owned(), "2026-07-21".to_owned()]
+        );
         assert_eq!(decoded.subtasks.len(), 1);
         assert!(decoded.subtasks[0].done);
         assert_eq!(decoded.attachments[0].url, "https://example.invalid/spec");

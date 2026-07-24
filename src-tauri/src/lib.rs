@@ -12,7 +12,7 @@ use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 use tauri_specta::{collect_commands, Builder};
 use todo_contracts::{RecurrenceRule, Todo};
-use todo_domain::{ics, recurrence};
+use todo_domain::{habit, ics, recurrence};
 #[cfg(test)]
 use todo_contracts::{
     Attachment, AttachmentKind, HealthResponse, RecurrenceCalendar, RecurrenceFrequency, Subtask,
@@ -88,6 +88,43 @@ fn next_occurrence(
 ) -> Result<Option<String>, String> {
     recurrence::next_occurrence(&rule, &anchor, &after)
         .map(|occurrence| occurrence.map(|occurrence| occurrence.date))
+        .map_err(|error| error.to_string())
+}
+
+/// A habit's streak and the recent scheduled days it could still be checked in
+/// on.
+///
+/// `streak` is how many scheduled days it has been kept up in a row; `makeup` are
+/// the recent days that fell due unchecked, most recent first, for the row's
+/// make-up buttons. Empty for a rule that is not a daily or weekly habit.
+#[derive(Clone, Debug, Serialize, TS, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitProgress {
+    pub streak: u32,
+    pub makeup: Vec<String>,
+}
+
+/// The streak and recent make-up days for a daily or weekly habit.
+///
+/// Habits are shown by advancing a single row and recording each check-in's
+/// scheduled date rather than leaving completed siblings behind (任务管理/09), so
+/// the streak is not a stored number but is counted afresh from the check-in set
+/// over the schedule. The view layer reaches this so that counting stays in the
+/// one engine that reads the calendar, never a second reading in TypeScript.
+/// `due_date` is the task's current due date (its next occurrence) and
+/// `check_ins` the scheduled dates already checked, both local `YYYY-MM-DD`.
+#[tauri::command]
+#[specta::specta]
+fn habit_progress(
+    rule: RecurrenceRule,
+    due_date: String,
+    check_ins: Vec<String>,
+) -> Result<HabitProgress, String> {
+    habit::habit_progress(&rule, &due_date, &check_ins)
+        .map(|progress| HabitProgress {
+            streak: progress.streak,
+            makeup: progress.makeup,
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -295,7 +332,8 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             delete_todo,
             replay_pending_writes,
             export_calendar,
-            next_occurrence
+            next_occurrence,
+            habit_progress
         ])
         // The two contract limits a user can reach by typing, so the view layer
         // caps both inputs at the numbers the contract enforces. Sharing the
@@ -547,6 +585,28 @@ mod tests {
         assert!(next_occurrence(weekly, "not-a-date".to_owned(), "2026-07-23".to_owned()).is_err());
     }
 
+    /// The habit command is a thin wrapper too: it reaches the engine and hands
+    /// back the streak and make-up days the row draws, or an error string for a
+    /// date it cannot read. The counting itself is `todo-domain`'s to test.
+    #[test]
+    fn habit_progress_hands_the_engine_answer_to_the_view_layer() {
+        let daily = recurrence_rule(RecurrenceFrequency::Daily, RecurrenceCalendar::Gregorian);
+
+        // Due today, the two days before it checked: a streak of two, and today
+        // is not among the days offered to make up.
+        let progress = habit_progress(
+            daily.clone(),
+            "2026-07-23".to_owned(),
+            vec!["2026-07-21".to_owned(), "2026-07-22".to_owned()],
+        )
+        .expect("a habit the engine can read");
+        assert_eq!(progress.streak, 2);
+        assert!(!progress.makeup.contains(&"2026-07-23".to_owned()));
+
+        // An unreadable due date is an error string, not a panic.
+        assert!(habit_progress(daily, "not-a-date".to_owned(), Vec::new()).is_err());
+    }
+
     fn frontend_bindings_path(file_name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../src/bindings")
@@ -575,6 +635,7 @@ mod tests {
         HealthResponse::export(&models_config).expect("export HealthResponse type");
         RuntimeInfo::export(&models_config).expect("export RuntimeInfo type");
         CalendarExport::export(&models_config).expect("export CalendarExport type");
+        HabitProgress::export(&models_config).expect("export HabitProgress type");
         ipc_builder()
             .export(Typescript::default(), frontend_bindings_path("commands.ts"))
             .expect("export tauri-specta bindings");

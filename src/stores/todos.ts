@@ -5,7 +5,13 @@ import type { TodoPatch } from "@/bindings/models/TodoPatch";
 import type { PageAlert } from "@/lib/page-alert";
 import { daysSinceLocalDay, isOverdue, todayLocalDay } from "@/lib/dueDate";
 import { normalizeNotes, normalizeTitle } from "@/lib/todo-normalize";
-import { daysBetween, nextOccurrence, shiftInstant, shiftLocalDate } from "@/lib/recurrence";
+import {
+  daysBetween,
+  isHabitRule,
+  nextOccurrence,
+  shiftInstant,
+  shiftLocalDate,
+} from "@/lib/recurrence";
 import { cancelAllReminders, cancelReminder, scheduleReminder } from "@/lib/notifications";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import { buildDeleteOperation, buildUpsertOperation, recordOperation } from "@/lib/sync-engine";
@@ -62,6 +68,9 @@ type FieldChange = Pick<
   // Carried so a recurring task advancing past an occurrence can write its
   // counted-down rule; ordinary edits do not touch it (its editor is elsewhere).
   | "recurrence"
+  // Carried so a habit's check-in and make-up can write the set of scheduled
+  // dates it has been checked in on; ordinary edits do not touch it.
+  | "checkIns"
 >;
 
 /**
@@ -112,6 +121,32 @@ const UNDO_DEPTH_LIMIT = 50;
  */
 const MAX_RECURRENCE_CATCHUP = 4000;
 
+/**
+ * How many scheduled check-in dates a habit keeps.
+ *
+ * Matches the contract's per-list ceiling, so the set stored on the row is never
+ * one the database would refuse. When a new check-in would overflow it the
+ * oldest is dropped: the streak counts back from the newest, and the make-up
+ * window reaches only the last few days, so what is trimmed is history neither
+ * reads — a fuller record is the heat-map's (视图与统计 7.4). The list is kept in
+ * date order so the drop is always of the earliest.
+ */
+const CHECK_IN_HISTORY_LIMIT = 200;
+
+/**
+ * The check-in set with `date` recorded: sorted, without duplicates, and bounded
+ * to the most recent [`CHECK_IN_HISTORY_LIMIT`]. `YYYY-MM-DD` sorts
+ * chronologically as plain text, so ordering and trimming the oldest are one
+ * `sort` and a `slice`.
+ */
+function addCheckIn(checkIns: readonly string[], date: string): string[] {
+  if (checkIns.includes(date)) return [...checkIns];
+  const next = [...checkIns, date].sort();
+  return next.length > CHECK_IN_HISTORY_LIMIT
+    ? next.slice(next.length - CHECK_IN_HISTORY_LIMIT)
+    : next;
+}
+
 /** Undoing a change means writing back what the fields held before it. */
 function inverse(entry: HistoryEntry): HistoryEntry {
   switch (entry.kind) {
@@ -152,6 +187,7 @@ function patchFromTodo(todo: Todo): TodoPatch {
     subtasks: todo.subtasks,
     attachments: todo.attachments,
     dependsOn: todo.dependsOn,
+    checkIns: todo.checkIns,
   };
 }
 
@@ -348,6 +384,9 @@ export const useTodoStore = defineStore("todos", () => {
       subtasks: [],
       attachments: [],
       dependsOn: [],
+      // A new task has been checked in on nothing yet; a habit fills this as it
+      // is kept up.
+      checkIns: [],
     };
 
     items.value.unshift(todo);
@@ -593,14 +632,21 @@ export const useTodoStore = defineStore("todos", () => {
     if (!todo) return;
 
     // Completing a recurring task that has a due date is the one toggle that also
-    // generates: it asks the engine for the next date, then applies the
-    // completion and the new instance together as a single undoable unit. A
-    // recurring task with no due date has no date to advance, so it completes
+    // asks the engine before it applies anything, so a second click in that
+    // window must not start a second one. Two shapes split here:
+    //   - a habit (daily/weekly) checks in: it records today's scheduled date
+    //     and advances its single row, leaving no completed sibling behind;
+    //   - any other frequency completes and generates its successor (08).
+    // A recurring task with no due date has no date to advance, so it completes
     // like any other; re-opening any task is likewise the plain path below.
     if (todo.status === "open" && todo.recurrence && todo.dueDate) {
       if (completingRecurring.has(id)) return;
       completingRecurring.add(id);
-      void completeRecurring({ ...toRaw(todo) }).finally(() => completingRecurring.delete(id));
+      const source = { ...toRaw(todo) };
+      const advance = isHabitRule(todo.recurrence)
+        ? checkInHabit(source)
+        : completeRecurring(source);
+      void advance.finally(() => completingRecurring.delete(id));
       return;
     }
 
@@ -665,6 +711,102 @@ export const useTodoStore = defineStore("todos", () => {
     });
   }
 
+  /**
+   * Checks a habit in for the day and advances its single row to the next
+   * occurrence — the daily/weekly path that replaces `completeRecurring` for
+   * these frequencies (任务管理/09, model B).
+   *
+   * Unlike `completeRecurring`, nothing is generated and the row does not
+   * complete: the scheduled date it stood on is recorded in the check-in history
+   * and the row moves on to its next occurrence, still open, so a week of a daily
+   * habit is one row rather than seven completed ones. The streak reads off the
+   * history, so this writes no counter. The next date comes from the same engine
+   * `completeRecurring` asks, counted from this occurrence's own due date; the
+   * other dates the task carries move along with it exactly as a generated
+   * successor's would.
+   *
+   * `null` from the engine means the series has ended (past its end date or
+   * count) or this runtime has no engine to ask (browser dev): the habit is done
+   * for good, so — the one time a habit row leaves "open" — it completes, still
+   * recording the final check-in. The whole change is one undo entry, so a single
+   * Ctrl+Z puts the row and its history back to before the check-in.
+   */
+  async function checkInHabit(source: Todo): Promise<void> {
+    const scheduled = source.dueDate;
+    if (!scheduled || !source.recurrence) return;
+
+    const nextDate = await nextOccurrence(source.recurrence, scheduled, scheduled);
+    const checkIns = addCheckIn(source.checkIns, scheduled);
+
+    if (nextDate === null) {
+      const before: FieldChange = {
+        status: source.status,
+        completedAt: source.completedAt,
+        checkIns: source.checkIns,
+      };
+      const after: FieldChange = {
+        status: "completed",
+        completedAt: new Date().toISOString(),
+        checkIns,
+      };
+      if (!applyChange(source.id, after)) return;
+      recordHistory({ kind: "change", id: source.id, before, after });
+      return;
+    }
+
+    // Advance in place. Only the fields that actually move are written, the same
+    // shape `advanceOverdueRecurring` uses, so an unchanged reminder or block is
+    // not sync noise and the undo entry restores exactly what changed.
+    const shift = daysBetween(scheduled, nextDate);
+    const before: FieldChange = { dueDate: source.dueDate, checkIns: source.checkIns };
+    const after: FieldChange = { dueDate: nextDate, checkIns };
+    if (source.startDate) {
+      before.startDate = source.startDate;
+      after.startDate = shiftLocalDate(source.startDate, shift);
+    }
+    if (source.reminderAt) {
+      before.reminderAt = source.reminderAt;
+      after.reminderAt = shiftInstant(source.reminderAt, shift);
+    }
+    if (source.startsAt) {
+      before.startsAt = source.startsAt;
+      after.startsAt = shiftInstant(source.startsAt, shift);
+    }
+    if (source.endsAt) {
+      before.endsAt = source.endsAt;
+      after.endsAt = shiftInstant(source.endsAt, shift);
+    }
+    const nextRule = decrementedCount(source.recurrence);
+    if (nextRule !== source.recurrence) {
+      before.recurrence = source.recurrence;
+      after.recurrence = nextRule;
+    }
+
+    if (!applyChange(source.id, after)) return;
+    recordHistory({ kind: "change", id: source.id, before, after });
+  }
+
+  /**
+   * Records a make-up check-in on a past scheduled date a habit missed.
+   *
+   * Only the check-in history changes: no row is created and the current due
+   * date is untouched, because the day being made up is behind the row's next
+   * occurrence, not a step of it — the very reason the history is a set of dates
+   * rather than a chain of instances. The streak recomputes from the history, so
+   * making up the most recent miss brings a broken streak back. One undo entry
+   * takes the make-up back out again. A day already checked in on is a no-op.
+   */
+  function makeUp(id: string, date: string) {
+    const todo = items.value.find((item) => item.id === id);
+    if (!todo?.recurrence || !isHabitRule(todo.recurrence)) return;
+    if (todo.checkIns.includes(date)) return;
+
+    const before: FieldChange = { checkIns: todo.checkIns };
+    const after: FieldChange = { checkIns: addCheckIn(todo.checkIns, date) };
+    if (!applyChange(id, after)) return;
+    recordHistory({ kind: "change", id, before, after });
+  }
+
   function remove(id: string) {
     const removed = deleteTodo(id);
     if (!removed) return;
@@ -725,6 +867,9 @@ export const useTodoStore = defineStore("todos", () => {
       // The one collection deliberately left behind: a dependency is this
       // task's position in the graph, not part of what the task says.
       dependsOn: [],
+      // A copy is a task to do again from scratch: it inherits none of the
+      // original's check-in history, so its streak starts over.
+      checkIns: [],
     };
 
     if (!insertTodo(copy, index + 1)) return null;
@@ -773,6 +918,10 @@ export const useTodoStore = defineStore("todos", () => {
       subtasks: source.subtasks.map((subtask) => ({ ...subtask, id: newId(), done: false })),
       attachments: source.attachments.map((attachment) => ({ ...attachment, id: newId() })),
       dependsOn: [],
+      // A generated instance is a fresh row; check-in history belongs to the
+      // habit, which advances in place rather than through this path (only the
+      // non-habit frequencies build a successor here).
+      checkIns: [],
     };
   }
 
@@ -1022,6 +1171,7 @@ export const useTodoStore = defineStore("todos", () => {
       if (patch?.subtasks !== undefined) existing.subtasks = patch.subtasks;
       if (patch?.attachments !== undefined) existing.attachments = patch.attachments;
       if (patch?.dependsOn !== undefined) existing.dependsOn = patch.dependsOn;
+      if (patch?.checkIns !== undefined) existing.checkIns = patch.checkIns;
       persist(existing);
       return;
     }
@@ -1052,6 +1202,7 @@ export const useTodoStore = defineStore("todos", () => {
         subtasks: patch.subtasks ?? [],
         attachments: patch.attachments ?? [],
         dependsOn: patch.dependsOn ?? [],
+        checkIns: patch.checkIns ?? [],
       };
       items.value.unshift(created);
       persist(created);
@@ -1088,6 +1239,7 @@ export const useTodoStore = defineStore("todos", () => {
     add,
     update,
     toggle,
+    makeUp,
     remove,
     duplicate,
     unarchive,

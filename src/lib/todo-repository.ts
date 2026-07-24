@@ -269,6 +269,7 @@ const TODO_FIELDS = {
     fallback: (): Attachment[] => [],
   },
   dependsOn: { accepts: isStringArray, fallback: (): string[] => [] },
+  checkIns: { accepts: isStringArray, fallback: (): string[] => [] },
 } satisfies Record<keyof Todo, TodoFieldRule>;
 
 /**

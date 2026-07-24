@@ -82,4 +82,16 @@ attachments: Array<Attachment>,
 /**
  * Tasks that must be done before this one.
  */
-dependsOn: Array<string>, };
+dependsOn: Array<string>, 
+/**
+ * Scheduled dates (`YYYY-MM-DD`) this task has been checked in on.
+ *
+ * A daily or weekly recurring task is shown as a habit (任务管理/09): checking
+ * it off records the scheduled date it stood on here and advances the single
+ * row to its next occurrence, rather than leaving a completed sibling behind.
+ * The streak is a pure function of this set over the schedule — no drifting
+ * counter is stored anywhere. Empty for every task that is not a checked-in
+ * habit, so it defaults like the other list-valued fields and a payload from
+ * a build that never knew it reads back empty.
+ */
+checkIns: Array<string>, };

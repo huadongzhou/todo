@@ -1,7 +1,8 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { nativeCommands } from "@/lib/native";
 import { writeDiagnostic } from "@/lib/diagnostics";
-import type { RecurrenceRule } from "@/types/todo";
+import type { HabitProgress } from "@/bindings/commands";
+import type { RecurrenceFrequency, RecurrenceRule } from "@/types/todo";
 
 /**
  * Recurrence view + generation helpers.
@@ -53,6 +54,82 @@ export function recurrenceLabel(rule: RecurrenceRule): string {
       // A frequency a newer build wrote and this one has no word for: the pill
       // says "it repeats" rather than going blank.
       return "重复";
+  }
+}
+
+/**
+ * Whether a repeat rule is a habit — a daily or weekly one, shown as a check-in
+ * row rather than a task that leaves a completed instance behind each time
+ * (任务管理/09). The frequency alone decides it; there is no separate "is a habit"
+ * flag on the contract.
+ */
+export function isHabitRule(rule: RecurrenceRule): boolean {
+  return rule.frequency === "daily" || rule.frequency === "weekly";
+}
+
+/**
+ * The streak pill's words — "连续 5 天" / "连续 3 周".
+ *
+ * Pure text, kept out of the component alongside `recurrenceLabel` and away from
+ * any colour class the way the rest of this file is (UnoCSS does not scan `.ts`).
+ * Only daily and weekly reach here — they are the only habits — so the unit is
+ * days unless the rule counts weeks.
+ */
+export function streakLabel(count: number, frequency: RecurrenceFrequency): string {
+  const unit = frequency === "weekly" ? "周" : "天";
+  return `连续 ${count} ${unit}`;
+}
+
+/**
+ * A make-up button's short face — "补 周一" for a weekly habit, "补 3日" for a
+ * daily one. The kind of day is what tells the missed occurrences apart at a
+ * glance: which weekday for a weekly rule, which day of the month for a daily
+ * one. An unreadable date degrades to a bare "补卡" rather than throwing.
+ */
+export function makeupShortLabel(date: string, frequency: RecurrenceFrequency): string {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return "补卡";
+  if (frequency === "weekly") return `补 ${WEEKDAY_ZH[parsed.getDay()]}`;
+  return `补 ${parsed.getDate()}日`;
+}
+
+/** The missed day as "M月D日", for a make-up button's full accessible name. */
+export function isoMonthDay(date: string): string {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return `${parsed.getMonth() + 1}月${parsed.getDate()}日`;
+}
+
+/** Sunday-first, matching `Date.prototype.getDay`. */
+const WEEKDAY_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"] as const;
+
+/**
+ * A habit's streak and the recent days it could still be checked in on, from the
+ * Rust engine — the app's single reading of "when does this repeat", so the pill
+ * and the make-up buttons never count the schedule a second time in TypeScript.
+ *
+ * `dueDate` is the task's current due date (its next occurrence) and `checkIns`
+ * the scheduled dates already checked. A non-Tauri runtime (browser dev) has no
+ * engine, so it answers `null` and the row simply shows no streak or make-up —
+ * the same way `nextOccurrence` degrades.
+ */
+export async function habitProgress(
+  rule: RecurrenceRule,
+  dueDate: string,
+  checkIns: readonly string[],
+): Promise<HabitProgress | null> {
+  if (!isTauri()) return null;
+
+  try {
+    const result = await nativeCommands.habitProgress(rule, dueDate, [...checkIns]);
+    if (result.status === "ok") return result.data;
+    writeDiagnostic("warn", "Habit progress refused by the engine", { error: result.error });
+    return null;
+  } catch (error) {
+    writeDiagnostic("error", "Habit progress lookup failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   }
 }
 
