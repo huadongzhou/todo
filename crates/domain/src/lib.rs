@@ -4,6 +4,7 @@ pub mod habit;
 pub mod holidays;
 pub mod ics;
 mod lunar;
+pub mod quiet;
 pub mod recurrence;
 pub mod reminder;
 pub mod renag;

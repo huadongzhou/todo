@@ -22,8 +22,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
+use todo_domain::ics::instant_unix_seconds;
+use todo_domain::quiet::plan_quiet_delivery;
 use todo_domain::reminder::{due_reminders, DueReminder};
-use todo_domain::renag::{due_renags, RenagDue};
+use todo_domain::renag::{due_renags, renag_occurrence_unix, RenagDue};
 
 use crate::reminder_prefs;
 use crate::todo_db::TodoDb;
@@ -43,6 +45,15 @@ const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// hours late and reads as overdue, which is the mark the restart catch-up is
 /// required to carry.
 const OVERDUE_GRACE_SECONDS: i64 = 60;
+
+/// Where the device sits, in seconds east of UTC, for the reads that are a local
+/// question — the overdue anchor (提醒通知/04) and the quiet window (提醒通知/05).
+///
+/// Zero for now: both read their boundary in UTC, which is exact for UTC and late
+/// — never early — for the primary east-of-UTC market. 提醒通知/07 feeds the
+/// device's real offset through `reminder_prefs` and this constant becomes that
+/// read, with no change to either rule.
+const ZONE_OFFSET_SECONDS: i64 = 0;
 
 /// Starts the background scheduler.
 ///
@@ -85,6 +96,12 @@ fn run(app: tauri::AppHandle) {
 /// Every failure is logged and swallowed — a database that is momentarily busy or
 /// a toast that will not show must not take the thread down, or one bad poll would
 /// end reminders for the rest of the run. The next tick tries again.
+///
+/// The due reminders and, when the user asked for them, the overdue renags
+/// (提醒通知/04) are gathered into one batch and passed through the quiet-window
+/// plan (提醒通知/05): inside the window nothing goes out, the night's held-back
+/// reminders are folded into one summary when the window ends, and with quiet
+/// hours off the plan is a plain "one toast each" — today's behaviour untouched.
 fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
     let db = app.state::<TodoDb>();
 
@@ -103,60 +120,119 @@ fn poll_once(app: &tauri::AppHandle, now_unix: i64) {
         }
     };
 
-    for reminder in due_reminders(&todos, &delivered, now_unix, OVERDUE_GRACE_SECONDS) {
-        let (title, body) = notification_text(&reminder);
-        if let Err(error) = app.notification().builder().title(title).body(body).show() {
-            log::warn!(
-                "Reminder for todo {} could not be shown: {error}",
-                reminder.todo_id
-            );
+    // The due batch: reminders always; overdue renags only when the switch is on,
+    // read fresh each poll so turning it off stops the next tick from nagging.
+    let mut items: Vec<DueItem> =
+        due_reminders(&todos, &delivered, now_unix, OVERDUE_GRACE_SECONDS)
+            .into_iter()
+            .map(DueItem::Reminder)
+            .collect();
+    if reminder_prefs::renag_overdue_enabled(app) {
+        items.extend(
+            due_renags(&todos, &delivered, now_unix, ZONE_OFFSET_SECONDS)
+                .into_iter()
+                .map(DueItem::Renag),
+        );
+    }
+
+    // The quiet window is read only when the switch is on, so with it off the plan
+    // is `deliver` = every item and `summarize` empty — the pre-05 send path. A
+    // switch left on but a window that will not parse reads as `None` too, and the
+    // plan fails open on it: a reminder is delivered rather than silently swallowed.
+    let window = if reminder_prefs::quiet_hours_enabled(app) {
+        reminder_prefs::quiet_hours_window(app)
+    } else {
+        None
+    };
+    let instants: Vec<i64> = items.iter().map(|item| item.instant_unix(now_unix)).collect();
+    let plan = plan_quiet_delivery(&instants, window, now_unix, ZONE_OFFSET_SECONDS);
+
+    // One toast each for the ordinary deliveries — reminders on time or overdue,
+    // renags, and any lone reminder flushed after the window.
+    for &index in &plan.deliver {
+        let item = &items[index];
+        let (title, body) = item.notification_text();
+        show(app, &title, &body, item.todo_id());
+        record(&db, item);
+    }
+
+    // A single summary for a held-back batch of two or more, then every one of them
+    // is recorded, so the batch is not raised again next poll. Recording all of
+    // them behind one toast is what makes "each reminder is delivered exactly once"
+    // hold for the summary path (提醒通知/05 §2).
+    if !plan.summarize.is_empty() {
+        let (title, body) = summary_notification_text(plan.summarize.len());
+        show(app, &title, &body, "quiet-hours summary");
+        for &index in &plan.summarize {
+            record(&db, &items[index]);
         }
-        // Recorded whether or not the toast showed. The attempt has been made, and
-        // re-raising it every tick because a show failed would turn one dropped
-        // toast into a stream of them. A pair that fails to record here is retried
-        // next tick — at worst one repeat, which "a reminder is never lost" prefers
-        // to a reminder silently dropped.
-        if let Err(error) = db.record_reminder_delivery(&reminder.todo_id, &reminder.reminder_at) {
-            log::warn!(
-                "Reminder delivery for todo {} could not be recorded: {error}",
-                reminder.todo_id
-            );
+    }
+}
+
+/// A reminder or an overdue renag that has come due this poll, unified so the
+/// quiet-hours plan weighs the two in one batch and can fold them into a single
+/// summary together (提醒通知/05 §2).
+enum DueItem {
+    Reminder(DueReminder),
+    Renag(RenagDue),
+}
+
+impl DueItem {
+    /// The instant the item came due, for placing it against the quiet window.
+    ///
+    /// A reminder carries its ISO `reminder_at`; a renag carries a `renag:<unix>`
+    /// key. A value neither reader can parse falls back to `now`, which reads as
+    /// outside the window whenever the poll itself is — so a stored value gone bad
+    /// is delivered, never held back and lost. In practice both always parse: the
+    /// reminder pass has already dropped an unreadable `reminder_at`, and a renag
+    /// key is one this build wrote.
+    fn instant_unix(&self, now_unix: i64) -> i64 {
+        let parsed = match self {
+            DueItem::Reminder(reminder) => instant_unix_seconds(&reminder.reminder_at),
+            DueItem::Renag(renag) => renag_occurrence_unix(&renag.reminder_at),
+        };
+        parsed.unwrap_or(now_unix)
+    }
+
+    /// The `(todo_id, reminder_at)` delivery key recorded once the item is raised,
+    /// so a later poll or a restart does not raise it again.
+    fn delivery_key(&self) -> (&str, &str) {
+        match self {
+            DueItem::Reminder(reminder) => (&reminder.todo_id, &reminder.reminder_at),
+            DueItem::Renag(renag) => (&renag.todo_id, &renag.reminder_at),
         }
     }
 
-    // Overdue renag (提醒通知/04) rides this same poll and the same send path as
-    // the reminders above: it is computed from the stored rows every tick and
-    // shown here, never sent out of band, so 勿扰时段 (05) can gate reminders and
-    // renags together by adding one silent-window check in front of the `show()`
-    // calls, with no queue of its own. The switch is read fresh from settings each
-    // poll, so turning it off stops the next tick from nagging.
-    if reminder_prefs::renag_overdue_enabled(app) {
-        // Zone offset 0 for now: the overdue anchor is read as the UTC end of the
-        // due day. That is exact for UTC and late — never early — for the primary
-        // east-of-UTC market (a task nags the morning after its day turns over),
-        // and can nag a few hours ahead of the app's own "overdue" mark for a
-        // device far west of UTC. Reading the device's real offset — which 勿扰
-        // (05) and 晨间摘要 (06) also need for a local window and a local time — is
-        // 时区策略 (07): it feeds the offset through `reminder_prefs` and this call
-        // gains its argument, with no change to the rule.
-        for renag in due_renags(&todos, &delivered, now_unix, 0) {
-            let (title, body) = renag_notification_text(&renag);
-            if let Err(error) = app.notification().builder().title(title).body(body).show() {
-                log::warn!(
-                    "Overdue renag for todo {} could not be shown: {error}",
-                    renag.todo_id
-                );
-            }
-            // Recorded like a reminder: the synthetic nag key stands in for a
-            // `reminder_at`, so a nag that has gone out is not raised again by a
-            // later poll or after a restart.
-            if let Err(error) = db.record_reminder_delivery(&renag.todo_id, &renag.reminder_at) {
-                log::warn!(
-                    "Overdue renag delivery for todo {} could not be recorded: {error}",
-                    renag.todo_id
-                );
-            }
+    /// The item's own notification text — the deadline reminder's, or the renag's.
+    fn notification_text(&self) -> (String, String) {
+        match self {
+            DueItem::Reminder(reminder) => notification_text(reminder),
+            DueItem::Renag(renag) => renag_notification_text(renag),
         }
+    }
+
+    /// The task id, for the log line when a raise fails.
+    fn todo_id(&self) -> &str {
+        self.delivery_key().0
+    }
+}
+
+/// Raises one toast, logging and swallowing a failure so a notification that will
+/// not show does not take the poll — or the thread — down with it.
+fn show(app: &tauri::AppHandle, title: &str, body: &str, context: &str) {
+    if let Err(error) = app.notification().builder().title(title).body(body).show() {
+        log::warn!("Notification for {context} could not be shown: {error}");
+    }
+}
+
+/// Records a delivery whether or not its toast showed. The attempt has been made,
+/// and re-raising it every tick because a show failed would turn one dropped toast
+/// into a stream of them. A key that fails to record is retried next tick — at
+/// worst one repeat, which "a reminder is never lost" prefers to one dropped.
+fn record(db: &TodoDb, item: &DueItem) {
+    let (todo_id, reminder_at) = item.delivery_key();
+    if let Err(error) = db.record_reminder_delivery(todo_id, reminder_at) {
+        log::warn!("Reminder delivery for todo {todo_id} could not be recorded: {error}");
     }
 }
 
@@ -191,6 +267,21 @@ fn renag_notification_text(renag: &RenagDue) -> (String, String) {
     let title = format!("逾期未完成 · {}", renag.title);
     let body = format!("已逾期 {} 天，完成后不再提醒。", renag.days_overdue);
     (title, body)
+}
+
+/// The one toast a held-back batch becomes when the quiet window ends with two or
+/// more reminders waiting (提醒通知/05 §2).
+///
+/// It names the count, not each task: a count is safe against any title and any
+/// number, and the app's own reminder bar takes over the per-task detail the
+/// moment the user opens the window. It carries no `【逾期】` mark either — 01's
+/// mark means "this reminder went out late by accident", and a reminder the user's
+/// own quiet hours held back was late on purpose, so the mark would misread it.
+fn summary_notification_text(count: usize) -> (String, String) {
+    (
+        "勿扰时段已结束".to_owned(),
+        format!("勿扰期间有 {count} 条提醒待查看。"),
+    )
 }
 
 /// The current instant in seconds since the Unix epoch. A clock set before 1970
@@ -233,6 +324,40 @@ mod tests {
         assert_eq!(title, "买牛奶");
         assert!(!title.contains("逾期"));
         assert_eq!(body, "提醒时间到了");
+    }
+
+    #[test]
+    fn a_quiet_hours_summary_names_the_count_and_carries_no_overdue_mark() {
+        // The window ended with several reminders waiting: one toast that says how
+        // many, without 01's `【逾期】` (they were held on purpose, not late).
+        let (title, body) = summary_notification_text(4);
+        assert_eq!(title, "勿扰时段已结束");
+        assert_eq!(body, "勿扰期间有 4 条提醒待查看。");
+        assert!(!title.contains("逾期"));
+    }
+
+    #[test]
+    fn a_due_item_reads_back_the_instant_that_placed_it_against_the_window() {
+        // A reminder's instant comes from its ISO `reminder_at`; a renag's from its
+        // `renag:<unix>` key. Both are what the quiet plan compares to the window.
+        let reminder = DueItem::Reminder(reminder(false, None));
+        assert_eq!(reminder.instant_unix(0), 1_784_883_600); // 2026-07-24T09:00:00Z
+        let renag = DueItem::Renag(RenagDue {
+            todo_id: "a".to_owned(),
+            title: "交周报".to_owned(),
+            reminder_at: "renag:1784908800".to_owned(),
+            days_overdue: 3,
+        });
+        assert_eq!(renag.instant_unix(0), 1_784_908_800);
+        // A value neither reader can parse falls back to `now`, so it is delivered
+        // rather than held.
+        let broken = DueItem::Renag(RenagDue {
+            todo_id: "a".to_owned(),
+            title: "x".to_owned(),
+            reminder_at: "renag:oops".to_owned(),
+            days_overdue: 1,
+        });
+        assert_eq!(broken.instant_unix(42), 42);
     }
 
     #[test]

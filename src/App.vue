@@ -132,6 +132,7 @@ onBeforeUnmount(() => {
   stopUndoShortcut?.();
   stopTodayCardSync?.();
   stopDayRollover?.();
+  if (quietStatusTick) clearInterval(quietStatusTick);
 });
 
 // Opening the setting raises the card; closing it tears the card down. We check
@@ -214,6 +215,81 @@ const pageAlert = computed(() =>
 // it behind would show a stale line the next time the panel is opened.
 watch(settingsOpen, (open) => {
   if (!open) exportAlert.value = null;
+});
+
+/**
+ * A minute-resolution clock that runs only while the settings panel is open, so
+ * the quiet-hours "静默中" line can flip as the window's edge passes without a
+ * timer running for the life of the app. Seeded and cleared by the watch below.
+ */
+const nowMinuteOfDay = ref(currentMinuteOfDay());
+let quietStatusTick: ReturnType<typeof setInterval> | undefined;
+
+function currentMinuteOfDay(): number {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+/** Parses `"HH:mm"` to a minute of the day, or `null` for anything else. */
+function quietMinutes(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+/**
+ * Whether the device is inside the quiet window right now. Mirrors the native
+ * gate (`todo_domain::quiet`) so the panel's status line agrees with what the
+ * scheduler does: start inclusive, end exclusive, and a window that crosses
+ * midnight (start > end) is the union of the evening and the small hours. A
+ * window that is off, blank, or start-equals-end silences nothing.
+ */
+const quietSilentNow = computed(() => {
+  if (!settingsStore.quietHoursEnabled) return false;
+  const start = quietMinutes(settingsStore.quietHoursStart);
+  const end = quietMinutes(settingsStore.quietHoursEnd);
+  if (start === null || end === null || start === end) return false;
+  const now = nowMinuteOfDay.value;
+  return start > end ? now >= start || now < end : now >= start && now < end;
+});
+
+/**
+ * The one human-readable line under the window inputs, computed from the times.
+ * It is what disambiguates a cross-midnight window ("次日" points out that
+ * 22:00–08:00 is the night, not a 22-hour day), names an empty window as
+ * silencing nothing, and appends the "静默中" confirmation while the window is
+ * active so the user knows why a reminder has gone quiet.
+ */
+const quietWindowDescription = computed(() => {
+  const start = settingsStore.quietHoursStart;
+  const end = settingsStore.quietHoursEnd;
+  if (!start || !end || start === end) {
+    return "开始与结束时间相同，当前不会静默。";
+  }
+  // Zero-padded "HH:mm" compares lexically, so a start after the end means the
+  // window runs past midnight into the next day.
+  const base =
+    start > end ? `每天 ${start} 到次日 ${end} 静默。` : `每天 ${start} 到 ${end} 静默。`;
+  return quietSilentNow.value ? `${base} 当前正处于静默中，提醒将在 ${end} 后补推。` : base;
+});
+
+// The status line's clock only needs to tick while the panel that shows it is
+// open; opening it also reseeds the minute so the line is right at once.
+watch(settingsOpen, (open) => {
+  if (open) {
+    nowMinuteOfDay.value = currentMinuteOfDay();
+    if (!quietStatusTick) {
+      quietStatusTick = setInterval(() => {
+        nowMinuteOfDay.value = currentMinuteOfDay();
+      }, 60_000);
+    }
+  } else if (quietStatusTick) {
+    clearInterval(quietStatusTick);
+    quietStatusTick = undefined;
+  }
 });
 
 /**
@@ -513,6 +589,74 @@ async function duplicateTodo(id: string): Promise<void> {
             >
           </span>
         </label>
+        <!--
+          Quiet hours sits with renag: both are "when does a notification go
+          out" gates — renag sends more, this holds them back — so they read as
+          one pair above the snooze durations. Off by default (holding back
+          system notifications is a change with consequences), the window opens
+          only once the switch is on so it adds no weight while off.
+        -->
+        <label
+          class="mb-2 flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900"
+        >
+          <input
+            type="checkbox"
+            :checked="settingsStore.quietHoursEnabled"
+            @change="
+              settingsStore.setQuietHoursEnabled(($event.target as HTMLInputElement).checked)
+            "
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-slate-800 dark:text-slate-100"
+              >勿扰时段</span
+            >
+            <span class="block text-xs text-slate-500 dark:text-slate-400"
+              >开启后，静默时段内的提醒暂存不打扰，时段结束后一并补推，不会丢失。</span
+            >
+          </span>
+        </label>
+        <template v-if="settingsStore.quietHoursEnabled">
+          <div class="mb-2 flex flex-col gap-3 px-3 sm:flex-row sm:gap-4">
+            <div class="min-w-0 flex-1">
+              <label
+                for="quiet-hours-start"
+                class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400"
+                >开始</label
+              >
+              <input
+                id="quiet-hours-start"
+                type="time"
+                :value="settingsStore.quietHoursStart"
+                aria-describedby="quiet-hours-window-desc"
+                class="min-h-11 w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-base focus:ring-2 focus:ring-sky-500 sm:text-sm dark:bg-slate-900"
+                @change="
+                  settingsStore.setQuietHoursStart(($event.target as HTMLInputElement).value)
+                "
+              />
+            </div>
+            <div class="min-w-0 flex-1">
+              <label
+                for="quiet-hours-end"
+                class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400"
+                >结束</label
+              >
+              <input
+                id="quiet-hours-end"
+                type="time"
+                :value="settingsStore.quietHoursEnd"
+                aria-describedby="quiet-hours-window-desc"
+                class="min-h-11 w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-base focus:ring-2 focus:ring-sky-500 sm:text-sm dark:bg-slate-900"
+                @change="settingsStore.setQuietHoursEnd(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+          </div>
+          <p
+            id="quiet-hours-window-desc"
+            class="mb-0 px-3 text-xs text-slate-500 dark:text-slate-400"
+          >
+            {{ quietWindowDescription }}
+          </p>
+        </template>
         <p class="mb-3 px-3 text-xs text-slate-500 dark:text-slate-400">
           以下时长会作为“稍后提醒”的快捷选项。
         </p>

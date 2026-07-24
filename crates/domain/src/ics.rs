@@ -437,7 +437,11 @@ fn parse_instant(value: &str) -> Option<ZonedInstant> {
 /// parser rather than keeping a second that could drift from it. Only the instant
 /// is handed back: which zone the value named is a calendar-export concern (see
 /// [`ZonedInstant`]), not a "has it arrived yet" one.
-pub(crate) fn instant_unix_seconds(value: &str) -> Option<i64> {
+///
+/// `pub` so the native scheduler can place a reminder's moment against the quiet
+/// window (提醒通知/05) with the same reader that decided the reminder was due,
+/// rather than re-parse the instant a second way that could disagree.
+pub fn instant_unix_seconds(value: &str) -> Option<i64> {
     parse_instant(value).map(|instant| instant.unix_seconds)
 }
 

@@ -18,6 +18,7 @@
 //! `settings.json` and one place each key's default lives.
 
 use tauri_plugin_store::StoreExt;
+use todo_domain::quiet::QuietWindow;
 
 /// The settings-store file the view layer persists preferences to.
 const SETTINGS_FILE: &str = "settings.json";
@@ -41,6 +42,24 @@ fn read_bool(app: &tauri::AppHandle, key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+/// Reads a string preference, degrading to `default` the same way [`read_bool`]
+/// does: a store that will not open, a missing key, or a value of the wrong type
+/// all fall back rather than drag a reminder behaviour down. The quiet-window
+/// times are read through this.
+fn read_string(app: &tauri::AppHandle, key: &str, default: &str) -> String {
+    let store = match app.store(SETTINGS_FILE) {
+        Ok(store) => store,
+        Err(error) => {
+            log::warn!("Unable to open settings store to read `{key}`: {error}");
+            return default.to_owned();
+        }
+    };
+    store
+        .get(key)
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| default.to_owned())
+}
+
 /// Whether "keep reminding while a task is overdue" is on.
 ///
 /// Off by default, matching the view layer's `reminder.renag` default: renag
@@ -49,4 +68,30 @@ fn read_bool(app: &tauri::AppHandle, key: &str, default: bool) -> bool {
 /// `useSettingsStore` writes.
 pub fn renag_overdue_enabled(app: &tauri::AppHandle) -> bool {
     read_bool(app, "reminder.renag", false)
+}
+
+/// Whether the do-not-disturb window is on (提醒通知/05).
+///
+/// Off by default, matching the view layer's `reminder.quiet.enabled` default:
+/// a silent window holds back system notifications — a change with consequences,
+/// like the rollover — so it stays off until the user turns it on. When it is off
+/// the scheduler never reads the window, so a reminder is delivered exactly as it
+/// is today.
+pub fn quiet_hours_enabled(app: &tauri::AppHandle) -> bool {
+    read_bool(app, "reminder.quiet.enabled", false)
+}
+
+/// The do-not-disturb window, parsed from the two `"HH:mm"` times the view layer
+/// stores, or `None` when either is missing, unreadable, or equal to the other.
+///
+/// The defaults (22:00–08:00) match what the settings store seeds, so a user who
+/// turns the switch on before ever touching the times gets that window. A `None`
+/// is the scheduler's cue to fail open — deliver rather than silence — which is
+/// what a blank or start-equals-end window must never do to a reminder (母任务
+/// "a reminder is never lost"). Reading the switch is left to
+/// [`quiet_hours_enabled`]; this only reads the span.
+pub fn quiet_hours_window(app: &tauri::AppHandle) -> Option<QuietWindow> {
+    let start = read_string(app, "reminder.quiet.start", "22:00");
+    let end = read_string(app, "reminder.quiet.end", "08:00");
+    QuietWindow::parse(&start, &end)
 }

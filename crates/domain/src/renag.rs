@@ -70,6 +70,17 @@ pub struct RenagDue {
     pub days_overdue: i64,
 }
 
+/// The Unix instant a renag key stands for, or `None` when the value is not a
+/// renag key this crate wrote.
+///
+/// A nag's delivery key is `renag:<unix>` (see [`RenagDue::reminder_at`]), the
+/// instant the nag came due. 勿扰时段 (提醒通知/05) has to place that instant
+/// against the quiet window, so it reads it back through this rather than split
+/// the string a second way that could drift from how the key is built.
+pub fn renag_occurrence_unix(reminder_at: &str) -> Option<i64> {
+    reminder_at.strip_prefix(RENAG_KEY_PREFIX)?.parse().ok()
+}
+
 /// The overdue tasks that should be nagged at `now_unix`, one nag each.
 ///
 /// `delivered` is the shared set of `(todo_id, reminder_at)` pairs already
@@ -440,6 +451,20 @@ mod tests {
             ids(&due_renags(&todos, &no_deliveries(), west_first_nag, west)),
             vec!["a"],
         );
+    }
+
+    #[test]
+    fn a_renag_key_reads_back_to_the_instant_it_was_built_from() {
+        // The key 提醒通知/05 places against the quiet window is the one this pass
+        // wrote, so the two agree on the nag's moment.
+        let todos = vec![overdue("a", "2026-07-24")];
+        let anchor = anchor("2026-07-24", UTC);
+        let occurrence = anchor + HOUR;
+        let due = due_renags(&todos, &no_deliveries(), occurrence, UTC);
+        assert_eq!(renag_occurrence_unix(&due[0].reminder_at), Some(occurrence));
+        // A real reminder instant is not a renag key.
+        assert_eq!(renag_occurrence_unix("2026-07-24T09:00:00Z"), None);
+        assert_eq!(renag_occurrence_unix("renag:not-a-number"), None);
     }
 
     #[test]

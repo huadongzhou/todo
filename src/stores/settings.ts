@@ -5,8 +5,10 @@ import { applyTheme, onSystemThemeChange, type ThemePreference } from "@/lib/app
 import { writeDiagnostic } from "@/lib/diagnostics";
 import {
   loadBooleanPreference,
+  loadStringPreference,
   loadThemePreference,
   saveBooleanPreference,
+  saveStringPreference,
   saveThemePreference,
 } from "@/lib/settings-storage";
 
@@ -44,6 +46,24 @@ export const useSettingsStore = defineStore("settings", () => {
    * this key is written to.
    */
   const renagOverdue = ref(false);
+  /**
+   * Whether reminders are held back during a nightly quiet window. Off by
+   * default: a silent window suppresses system notifications until it ends, a
+   * change with consequences like the rollover, so the user opts in. Read
+   * natively by the reminder scheduler (`reminder_prefs.rs`) — the window has to
+   * gate a reminder that fires while the app is only in the tray — through the
+   * same `settings.json` these three keys are written to.
+   */
+  const quietHoursEnabled = ref(false);
+  /**
+   * The quiet window's start and end, as `"HH:mm"` local times. Stored even
+   * while the switch is off (so turning it on shows 22:00–08:00 rather than a
+   * blank), and read back the same by the scheduler. A window whose start equals
+   * its end names no span and silences nothing — the native side fails open on
+   * it — so the view does not block the user from setting one.
+   */
+  const quietHoursStart = ref("22:00");
+  const quietHoursEnd = ref("08:00");
   const isReady = ref(false);
   const persistenceError = ref<string | null>(null);
   let unsubscribeSystemTheme: (() => void) | undefined;
@@ -73,6 +93,9 @@ export const useSettingsStore = defineStore("settings", () => {
       snoozeTonight.value = await loadBooleanPreference("reminder.snooze.tonight", true);
       snoozeTomorrow.value = await loadBooleanPreference("reminder.snooze.tomorrow", true);
       renagOverdue.value = await loadBooleanPreference("reminder.renag", false);
+      quietHoursEnabled.value = await loadBooleanPreference("reminder.quiet.enabled", false);
+      quietHoursStart.value = await loadStringPreference("reminder.quiet.start", "22:00");
+      quietHoursEnd.value = await loadStringPreference("reminder.quiet.end", "08:00");
       await applyTheme(theme.value);
       watchSystemTheme();
       writeDiagnostic("info", "Settings restored", {
@@ -85,6 +108,9 @@ export const useSettingsStore = defineStore("settings", () => {
         snoozeTonight: snoozeTonight.value,
         snoozeTomorrow: snoozeTomorrow.value,
         renagOverdue: renagOverdue.value,
+        quietHoursEnabled: quietHoursEnabled.value,
+        quietHoursStart: quietHoursStart.value,
+        quietHoursEnd: quietHoursEnd.value,
       });
     } catch {
       theme.value = "system";
@@ -96,6 +122,9 @@ export const useSettingsStore = defineStore("settings", () => {
       snoozeTonight.value = true;
       snoozeTomorrow.value = true;
       renagOverdue.value = false;
+      quietHoursEnabled.value = false;
+      quietHoursStart.value = "22:00";
+      quietHoursEnd.value = "08:00";
       persistenceError.value = "设置恢复失败，已使用系统默认值。";
       // The fallback itself must never throw: `main.ts` awaits `bootstrap()`
       // before mounting, so a second failure here would take the whole UI down
@@ -227,6 +256,49 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  async function setQuietHoursEnabled(enabled: boolean): Promise<void> {
+    quietHoursEnabled.value = enabled;
+    persistenceError.value = null;
+
+    try {
+      await saveBooleanPreference("reminder.quiet.enabled", enabled);
+      writeDiagnostic("info", "Quiet-hours preference updated", { quietHoursEnabled: enabled });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Quiet-hours preference could not be persisted", {
+        quietHoursEnabled: enabled,
+      });
+    }
+  }
+
+  /**
+   * The write half the two quiet-time setters share. Each flips its own ref (so
+   * the input reflects the change at once) and hands the key and value here;
+   * keeping the persistence in one place is what stops two copies of the same
+   * try/catch from drifting apart, as `persistSnoozePreference` does for snooze.
+   */
+  async function persistQuietPreference(key: string, value: string): Promise<void> {
+    persistenceError.value = null;
+
+    try {
+      await saveStringPreference(key, value);
+      writeDiagnostic("info", "Quiet-hours window updated", { key, value });
+    } catch {
+      persistenceError.value = "设置暂时无法保存。";
+      writeDiagnostic("warn", "Quiet-hours window could not be persisted", { key, value });
+    }
+  }
+
+  async function setQuietHoursStart(value: string): Promise<void> {
+    quietHoursStart.value = value;
+    await persistQuietPreference("reminder.quiet.start", value);
+  }
+
+  async function setQuietHoursEnd(value: string): Promise<void> {
+    quietHoursEnd.value = value;
+    await persistQuietPreference("reminder.quiet.end", value);
+  }
+
   return {
     theme,
     themeLabel,
@@ -238,6 +310,9 @@ export const useSettingsStore = defineStore("settings", () => {
     snoozeTonight,
     snoozeTomorrow,
     renagOverdue,
+    quietHoursEnabled,
+    quietHoursStart,
+    quietHoursEnd,
     isDesktop,
     isReady,
     persistenceError,
@@ -251,5 +326,8 @@ export const useSettingsStore = defineStore("settings", () => {
     setSnoozeTonight,
     setSnoozeTomorrow,
     setRenagOverdue,
+    setQuietHoursEnabled,
+    setQuietHoursStart,
+    setQuietHoursEnd,
   };
 });
