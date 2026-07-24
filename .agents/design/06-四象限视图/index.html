@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>四象限视图 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01/02 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01·02 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 侧栏 / 内凹底衬 */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --input-bg: #f1f5f9;       /* slate-100 输入底 */
+    --row-divider: #f1f5f9;    /* slate-100 行分隔 */
+    --circle-border: #cbd5e1;  /* slate-300 完成圈描边 */
+    --icon-muted: #94a3b8;     /* slate-400 图标默认 */
+    --icon-hover: #020617;     /* slate-950 图标 hover */
+    --danger-fg: #dc2626;      /* red-600 删除 hover 语义 */
+    /* ghost 按钮 */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（浅色「100 底 + 700 字」；与 01·02 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700 */
+    --control-off: #cbd5e1;    /* slate-300 开关/复选关闭轨 */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --border: #1e293b;         /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --input-bg: #0f172a;       /* slate-900 */
+    --row-divider: #1e293b;    /* slate-800 */
+    --circle-border: #475569;  /* slate-600 */
+    --icon-muted: #94a3b8;     /* slate-400 */
+    --icon-hover: #f8fafc;     /* slate-100 */
+    --danger-fg: #f87171;      /* red-400 */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+    --control-off: #334155;             /* slate-700 */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+
+  /* ===== 抬头（与 01·02 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* ===== 应用窗（导航壳，沿用 02） ===== */
+  .app-window { display: flex; align-items: stretch; overflow: hidden; margin-bottom: 28px; }
+
+  .sidebar {
+    width: 256px; flex: none; background: var(--nested-bg);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 20px 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; }
+  .brand .logo {
+    width: 32px; height: 32px; border-radius: 8px; background: #0ea5e9;
+    display: flex; align-items: center; justify-content: center; color: #fff; flex: none;
+  }
+  .brand .name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand .name span { color: #0ea5e9; }
+  .side-cta {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; height: 44px; border: none; border-radius: 8px;
+    background: #0ea5e9; color: #fff; font-family: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; margin-bottom: 20px;
+  }
+  .nav-group { margin-bottom: 18px; }
+  .nav-label {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-secondary); padding: 0 10px; margin-bottom: 8px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; min-height: 44px;
+    padding: 8px 10px; border-radius: 8px; color: var(--text-secondary);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .nav-item .ic { color: currentColor; flex: none; }
+  .nav-item .lbl { flex: 1; min-width: 0; color: var(--text); }
+  .nav-item .cnt { font-size: 12px; color: var(--text-secondary); }
+  .nav-item.active { background: var(--info-bg); color: var(--info-fg); }
+  .nav-item.active .lbl { color: var(--info-fg); }
+  .nav-item.active .cnt { color: var(--info-fg); }
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 4px; }
+  .tag-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 9999px;
+    background: var(--normal-bg); color: var(--normal-fg);
+  }
+  .tag-chip .swatch { width: 8px; height: 8px; border-radius: 50%; }
+  .side-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
+
+  /* 主区 */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--card-bg); }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+  }
+  .segmented { display: inline-flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--nested-bg); }
+  .seg {
+    display: inline-flex; align-items: center; gap: 6px;
+    min-height: 44px; padding: 6px 16px; border-radius: 6px; border: none;
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+    background: transparent; color: var(--text-secondary);
+  }
+  .seg.active { background: var(--card-bg); color: var(--text); box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+  .dark .seg.active { background: #1e293b; }
+  .top-right { display: flex; align-items: center; gap: 12px; }
+  .sync { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+  .sync .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success-fg); flex: none; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--ghost-hover-bg); color: var(--icon-hover); }
+
+  .content { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+
+  /* ===== 四象限矩阵 ===== */
+  .board {
+    display: grid;
+    grid-template-columns: 30px 1fr 1fr;
+    grid-template-rows: 26px auto auto;
+    gap: 12px;
+  }
+  /* 轴标签 */
+  .axis-top { display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .axis-top .name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .axis-top .cap { font-size: 11px; color: var(--text-secondary); }
+  .axis-corner { display: flex; align-items: center; justify-content: center; }
+  .axis-corner .tag { font-size: 10px; font-weight: 600; color: var(--text-secondary); letter-spacing: .02em; transform: rotate(-45deg); white-space: nowrap; }
+  .axis-left { display: flex; align-items: center; justify-content: center; }
+  .axis-left .rot { writing-mode: vertical-rl; text-orientation: upright; display: inline-flex; align-items: center; gap: 8px; letter-spacing: 0.04em; }
+  .axis-left .name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .axis-left .cap { font-size: 11px; color: var(--text-secondary); }
+
+  /* 象限卡 */
+  .qcard { display: flex; flex-direction: column; overflow: hidden; }
+  .qhead {
+    display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px;
+    border-top: 2px solid var(--q-accent);
+    background: var(--card-bg);
+  }
+  .qhead .qdot { width: 9px; height: 9px; border-radius: 50%; background: var(--q-accent); flex: none; }
+  .qhead h3 { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: -0.005em; }
+  .qhead .qverb {
+    font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 9999px;
+    background: var(--normal-bg); color: var(--normal-fg);
+  }
+  .qhead .qcount { margin-left: auto; font-size: 12px; color: var(--text-secondary); }
+  .q-imp-urg  { --q-accent: var(--overdue-fg); }
+  .q-imp-nurg { --q-accent: var(--info-fg); }
+  .q-nimp-urg { --q-accent: var(--soon-fg); }
+  .q-nimp-nurg{ --q-accent: var(--normal-fg); }
+
+  .qbody {
+    background: var(--nested-bg); padding: 12px; flex: 1;
+    display: flex; flex-direction: column; gap: 10px; min-height: 176px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* 任务卡（待办行卡片化复用） */
+  .tcard {
+    display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+  }
+  .circle {
+    width: 24px; height: 24px; flex: none; border-radius: 50%; margin-top: 1px;
+    border: 1px solid var(--circle-border); background: var(--card-bg);
+    display: flex; align-items: center; justify-content: center; color: #fff;
+  }
+  .circle.checked { background: #0ea5e9; border-color: #0ea5e9; }
+  .tmain { min-width: 0; flex: 1; }
+  .ttitle { font-size: 16px; line-height: 1.4; color: #334155; }  /* slate-700 正文 */
+  .dark .ttitle { color: #e2e8f0; }
+  .ttitle.done { color: #94a3b8; text-decoration: line-through; }
+  .dark .ttitle.done { color: #64748b; }
+  .badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 500; padding: 2px 6px; border-radius: 6px;
+  }
+  .badge.tnum { font-variant-numeric: tabular-nums; }
+  .badge svg { flex: none; }
+  .badge.due-overdue { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .badge.due-soon    { background: var(--soon-bg);    color: var(--soon-fg); }
+  .badge.due-normal  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .badge.pill-slate  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .badge.pill-emerald{ background: var(--success-bg); color: var(--success-fg); }
+  .due-plain { font-size: 12px; font-weight: 500; padding: 2px 6px; color: var(--text); }
+  .grip {
+    flex: none; margin-top: 2px; color: var(--icon-muted);
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; cursor: grab;
+  }
+  .tcard.hovering { border-color: var(--circle-border); }
+  .tcard.hovering .grip { color: var(--text-secondary); }
+
+  /* 象限内新建入口 + 空象限 */
+  .q-add {
+    display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+    font-size: 13px; font-weight: 500; color: var(--ghost-text);
+    background: transparent; border: 1px dashed var(--border); border-radius: 8px;
+    padding: 7px 12px; cursor: pointer; min-height: 36px;
+  }
+  .q-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 18px 12px; margin: auto 0; }
+  .q-empty .ei { color: var(--text-secondary); opacity: .7; }
+  .q-empty .et { font-size: 14px; font-weight: 600; }
+  .q-empty .es { font-size: 12px; color: var(--text-secondary); max-width: 260px; line-height: 1.5; }
+  .q-empty .q-add { margin-top: 4px; }
+
+  /* 未分类托盘 */
+  .untray { padding: 16px 18px; }
+  .untray-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .untray-head .ut-ic { color: var(--text-secondary); flex: none; }
+  .untray-head .ut-t { font-size: 14px; font-weight: 600; }
+  .untray-head .ut-s { font-size: 12px; color: var(--text-secondary); }
+  .untray-head .ut-cnt {
+    font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 9999px;
+    background: var(--normal-bg); color: var(--normal-fg);
+  }
+  .un-row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .un-chip {
+    display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px;
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+  }
+  .un-chip .circle { width: 20px; height: 20px; margin-top: 0; }
+  .un-chip .uc-t { font-size: 14px; color: var(--text); }
+  .un-chip .grip { width: 18px; height: 18px; margin-top: 0; }
+  .un-chip .un-set {
+    font-size: 12px; font-weight: 500; color: var(--info-fg);
+    background: transparent; border: none; cursor: pointer; padding: 0 2px;
+    display: inline-flex; align-items: center; gap: 3px;
+  }
+
+  /* ===== 状态板 ===== */
+  .panel { padding: 24px; }
+  .panel-title { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .panel-note { font-size: 12px; color: var(--text-secondary); margin: 0 0 18px; line-height: 1.5; }
+  .states-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 24px; }
+
+  /* 拖拽演示 mini 板 */
+  .drag-demo { position: relative; }
+  .mini-board { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .drop-gap {
+    height: 46px; border: 2px dashed var(--border); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .qbody.drop-target {
+    background: var(--info-bg); border: 2px dashed var(--info-fg);
+    align-items: center; justify-content: center; text-align: center;
+  }
+  .drop-label { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; color: var(--info-fg); font-size: 13px; font-weight: 600; }
+  .drop-label .di { opacity: .9; }
+  .tcard.dragging {
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05), 0 0 0 2px var(--ring-offset), 0 0 0 4px #0ea5e9;
+    opacity: .96; cursor: grabbing;
+  }
+  .float-card {
+    position: absolute; width: 230px; z-index: 5;
+    top: 118px; left: 214px;
+  }
+  .float-card .grip { color: #0ea5e9; }
+
+  /* 快速设置浮层 */
+  .pop-demo { position: relative; }
+  .pop {
+    width: 288px; padding: 4px; margin-top: 12px;
+  }
+  .pop-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 8px; }
+  .pop-head .pt { font-size: 14px; font-weight: 600; }
+  .pop-row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-top: 1px solid var(--row-divider);
+  }
+  .pop-row .pr-ic { color: var(--text-secondary); flex: none; }
+  .pop-row .pr-l { flex: 1; min-width: 0; }
+  .pop-row .pr-t { font-size: 14px; font-weight: 500; color: var(--text); }
+  .pop-row .pr-s { font-size: 12px; color: var(--text-secondary); margin-top: 1px; }
+  .switch { position: relative; width: 40px; height: 24px; border-radius: 9999px; background: var(--control-off); transition: background-color .18s ease; flex: none; }
+  .switch.on { background: #0ea5e9; }
+  .switch .knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+  .switch.on .knob { transform: translateX(16px); }
+  .pop-result {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    border-top: 1px solid var(--row-divider); font-size: 12px; color: var(--text-secondary);
+  }
+  .pop-foot { padding: 8px 12px 10px; border-top: 1px solid var(--row-divider); }
+  .pop-clear {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 500; color: var(--ghost-text);
+    background: transparent; border: none; border-radius: 8px; padding: 8px 10px; cursor: pointer;
+  }
+  .pop-clear:hover { background: var(--ghost-hover-bg); color: var(--ghost-hover-text); }
+  .btn-mini {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer;
+  }
+  .btn-mini.on { color: var(--info-fg); background: var(--info-bg); }
+
+  .pop-anchor-card { max-width: 320px; }
+  .pop-trigger {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; border: none; background: var(--info-bg);
+    color: var(--info-fg); cursor: pointer; flex: none; margin-top: 1px;
+  }
+
+  .legend { display: flex; gap: 10px; align-items: flex-start; margin-top: 6px; }
+  .legend svg { flex: none; margin-top: 1px; color: var(--info-fg); }
+  .legend .txt { font-size: 12px; line-height: 1.55; color: var(--text-secondary); }
+  .foot-note { text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>四象限视图</h1>
+      <p class="lead">重要 × 紧急 · 四格布局 + 待办行卡片 · 跨象限拖拽 · 快速设置 · 空象限与未分类</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <!-- ===== 应用窗：壳 + 四象限（主态） ===== -->
+  <div class="surface-card app-window">
+
+    <!-- 侧栏（沿用 02） -->
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <span class="logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <span class="name">Just<span> Do</span></span>
+      </div>
+      <button class="side-cta" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+        新建任务
+      </button>
+      <nav class="nav-group" aria-label="清单">
+        <div class="nav-label">清单</div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="lbl">收件箱</span><span class="cnt num">4</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+          <span class="lbl">今天</span><span class="cnt num">6</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+          <span class="lbl">计划</span><span class="cnt num">12</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+          <span class="lbl">已完成</span><span class="cnt num">38</span>
+        </div>
+      </nav>
+      <nav class="nav-group" aria-label="标签">
+        <div class="nav-label">标签</div>
+        <div class="tag-row">
+          <span class="tag-chip"><span class="swatch" style="background:#0ea5e9"></span>工作</span>
+          <span class="tag-chip"><span class="swatch" style="background:#10b981"></span>个人</span>
+          <span class="tag-chip"><span class="swatch" style="background:#f59e0b"></span>学习</span>
+        </div>
+      </nav>
+      <nav class="nav-group" aria-label="更多">
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+          <span class="lbl">成就</span>
+        </div>
+      </nav>
+      <div class="side-foot">
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+          <span class="lbl">设置</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主区 -->
+    <section class="main" aria-label="四象限视图">
+      <div class="topbar">
+        <div class="segmented" role="tablist" aria-label="视图切换">
+          <button class="seg" role="tab" aria-selected="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="m18 9 3 3-3 3"/></svg>
+            列表
+          </button>
+          <button class="seg" role="tab" aria-selected="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+            日历
+          </button>
+          <button class="seg active" role="tab" aria-selected="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+            四象限
+          </button>
+        </div>
+        <div class="top-right">
+          <span class="sync"><span class="dot"></span>已同步 · 3 分钟前</span>
+          <button class="icon-btn" type="button" aria-label="立即同步">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="caption" style="display:flex;align-items:center;gap:8px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--info-fg)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          按 <b style="color:var(--text)">重要程度</b>（上下）× <b style="color:var(--text)">紧迫程度</b>（左右）组织今天的 6 项任务，拖动卡片可跨象限调整优先级。
+        </div>
+
+        <!-- 矩阵 -->
+        <div class="board">
+          <!-- 行 1：顶轴 -->
+          <div class="axis-corner"><span class="tag">重要 × 紧急</span></div>
+          <div class="axis-top"><span class="name">紧急</span><span class="cap">· 紧迫程度 →</span></div>
+          <div class="axis-top"><span class="name">不紧急</span></div>
+
+          <!-- 行 2：重要（左轴）+ 两象限 -->
+          <div class="axis-left"><span class="rot"><span class="name">重要</span><span class="cap">· 重要程度 ↑</span></span></div>
+
+          <!-- 重要且紧急 -->
+          <section class="surface-card qcard q-imp-urg" aria-label="重要且紧急">
+            <div class="qhead">
+              <span class="qdot"></span>
+              <h3>重要且紧急</h3>
+              <span class="qverb">先做</span>
+              <span class="qcount num">2</span>
+            </div>
+            <div class="qbody">
+              <div class="tcard">
+                <span class="circle"></span>
+                <div class="tmain">
+                  <div class="ttitle">提交季度预算表</div>
+                  <div class="badges">
+                    <span class="badge due-overdue">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                      逾期 2 天 · 已设提醒
+                    </span>
+                  </div>
+                </div>
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+              </div>
+              <div class="tcard hovering">
+                <span class="circle"></span>
+                <div class="tmain">
+                  <div class="ttitle">修复线上支付故障</div>
+                  <div class="badges">
+                    <span class="badge due-soon">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      今天 17:00 · 已设提醒
+                    </span>
+                  </div>
+                </div>
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 重要不紧急 -->
+          <section class="surface-card qcard q-imp-nurg" aria-label="重要不紧急">
+            <div class="qhead">
+              <span class="qdot"></span>
+              <h3>重要不紧急</h3>
+              <span class="qverb">计划</span>
+              <span class="qcount num">2</span>
+            </div>
+            <div class="qbody">
+              <div class="tcard">
+                <span class="circle"></span>
+                <div class="tmain">
+                  <div class="ttitle">制定 Q4 增长计划</div>
+                  <div class="badges">
+                    <span class="badge due-normal">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                      3 天后
+                    </span>
+                  </div>
+                </div>
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+              </div>
+              <div class="tcard">
+                <span class="circle"></span>
+                <div class="tmain">
+                  <div class="ttitle">阅读 30 分钟</div>
+                  <div class="badges">
+                    <span class="badge due-soon">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      明天
+                    </span>
+                    <span class="badge pill-slate">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+                      每天
+                    </span>
+                    <span class="badge pill-emerald">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+                      连续 5 天
+                    </span>
+                  </div>
+                </div>
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 行 3：不重要（左轴）+ 两象限 -->
+          <div class="axis-left"><span class="rot"><span class="name">不重要</span></span></div>
+
+          <!-- 不重要紧急 -->
+          <section class="surface-card qcard q-nimp-urg" aria-label="不重要但紧急">
+            <div class="qhead">
+              <span class="qdot"></span>
+              <h3>不重要但紧急</h3>
+              <span class="qverb">快速处理</span>
+              <span class="qcount num">2</span>
+            </div>
+            <div class="qbody">
+              <div class="tcard">
+                <span class="circle"></span>
+                <div class="tmain">
+                  <div class="ttitle">回复活动报名邮件</div>
+                  <div class="badges">
+                    <span class="badge due-soon">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      今天
+                    </span>
+                  </div>
+                </div>
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+              </div>
+              <!-- 完成态（降对比 + 删除线，忠实复刻待办行完成态） -->
+              <div class="tcard">
+                <span class="circle checked">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <div class="tmain">
+                  <div class="ttitle done">整理会议纪要</div>
+                  <div class="badges"><span class="due-plain">今天</span></div>
+                </div>
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 不重要不紧急（空象限态） -->
+          <section class="surface-card qcard q-nimp-nurg" aria-label="不重要不紧急">
+            <div class="qhead">
+              <span class="qdot"></span>
+              <h3>不重要不紧急</h3>
+              <span class="qverb">少做</span>
+              <span class="qcount num">0</span>
+            </div>
+            <div class="qbody">
+              <div class="q-empty">
+                <div class="ei">
+                  <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h8"/></svg>
+                </div>
+                <div class="et">这个象限空着</div>
+                <div class="es">这里放可以少做或稍后清理的事——把卡片拖进来，或直接新建。</div>
+                <button class="q-add" type="button">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  新建到此象限
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 未分类托盘 -->
+        <div class="surface-card untray" role="region" aria-label="未分类任务">
+          <div class="untray-head">
+            <svg class="ut-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/></svg>
+            <span class="ut-t">未分类</span>
+            <span class="ut-cnt num">3 项</span>
+            <span class="ut-s">未设重要 / 紧急 —— 拖到上方象限，或点「设为…」分类</span>
+          </div>
+          <div class="un-row">
+            <div class="un-chip">
+              <span class="circle"></span>
+              <span class="uc-t">买生日礼物</span>
+              <button class="un-set" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+                设为…
+              </button>
+              <span class="grip" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+            </div>
+            <div class="un-chip">
+              <span class="circle"></span>
+              <span class="uc-t">预约牙医</span>
+              <button class="un-set" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+                设为…
+              </button>
+              <span class="grip" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+            </div>
+            <div class="un-chip">
+              <span class="circle"></span>
+              <span class="uc-t">更新简历</span>
+              <button class="un-set" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+                设为…
+              </button>
+              <span class="grip" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== 状态板 ===== -->
+  <!-- 跨象限拖拽态 -->
+  <section class="surface-card panel">
+    <div class="panel-title">跨象限拖拽态</div>
+    <div class="panel-note">拖起卡片以品牌焦点环 + 微透明表达「抓起」（不新增阴影档）；源位留虚线占位；目标象限高亮为品牌浅底 + 虚线边 + 明确「松开放入」文字与图标。</div>
+    <div class="drag-demo">
+      <div class="mini-board">
+        <!-- 源象限（重要且紧急）：留占位 -->
+        <section class="surface-card qcard q-imp-urg" aria-label="重要且紧急（拖出中）">
+          <div class="qhead"><span class="qdot"></span><h3>重要且紧急</h3><span class="qverb">先做</span><span class="qcount num">1</span></div>
+          <div class="qbody">
+            <div class="tcard">
+              <span class="circle"></span>
+              <div class="tmain">
+                <div class="ttitle">提交季度预算表</div>
+                <div class="badges"><span class="badge due-overdue"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>逾期 2 天</span></div>
+              </div>
+              <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+            </div>
+            <div class="drop-gap">原位置</div>
+          </div>
+        </section>
+
+        <!-- 目标象限（重要不紧急）：高亮 -->
+        <section class="surface-card qcard q-imp-nurg" aria-label="重要不紧急（拖入目标）">
+          <div class="qhead"><span class="qdot"></span><h3>重要不紧急</h3><span class="qverb">计划</span><span class="qcount num">1</span></div>
+          <div class="qbody drop-target">
+            <span class="drop-label">
+              <span class="di"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>
+              松开放入「重要不紧急」
+            </span>
+          </div>
+        </section>
+      </div>
+
+      <!-- 浮起的拖拽卡 -->
+      <div class="tcard dragging float-card" aria-hidden="true">
+        <span class="circle"></span>
+        <div class="tmain">
+          <div class="ttitle">制定 Q4 增长计划</div>
+          <div class="badges"><span class="badge due-soon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>今天</span></div>
+        </div>
+        <span class="grip"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>
+      </div>
+    </div>
+  </section>
+
+  <div class="states-2">
+    <!-- 快速设置入口 -->
+    <section class="surface-card panel">
+      <div class="panel-title">快速设置入口（重要 / 紧急）</div>
+      <div class="panel-note">任务卡「优先级」按钮唤起浮层：两枚开关直接对应契约的可空布尔 important / urgent；结果实时回显目标象限；「清除分类」将两者置空、退回未分类。</div>
+
+      <div class="pop-demo">
+        <div class="surface-card tcard pop-anchor-card" style="background:var(--card-bg)">
+          <span class="circle"></span>
+          <div class="tmain">
+            <div class="ttitle">制定 Q4 增长计划</div>
+            <div class="badges"><span class="badge due-normal"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>3 天后</span></div>
+          </div>
+          <button class="pop-trigger" type="button" aria-label="设置优先级" aria-expanded="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+          </button>
+        </div>
+
+        <div class="surface-card pop" role="dialog" aria-label="设置优先级">
+          <div class="pop-head">
+            <span class="pt">设置优先级</span>
+            <button class="btn-mini" type="button" aria-label="关闭">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div class="pop-row">
+            <span class="pr-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span>
+            <div class="pr-l"><div class="pr-t">重要</div><div class="pr-s">影响长期目标</div></div>
+            <span class="switch on" role="switch" aria-checked="true"><span class="knob"></span></span>
+          </div>
+          <div class="pop-row">
+            <span class="pr-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+            <div class="pr-l"><div class="pr-t">紧急</div><div class="pr-s">需尽快处理</div></div>
+            <span class="switch" role="switch" aria-checked="false"><span class="knob"></span></span>
+          </div>
+          <div class="pop-result">
+            <span>结果 →</span>
+            <span class="badge pill-slate"><span class="qdot" style="width:8px;height:8px;border-radius:50%;background:var(--info-fg)"></span>重要不紧急</span>
+          </div>
+          <div class="pop-foot">
+            <button class="pop-clear" type="button">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+              清除分类（移出矩阵）
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 空象限态 + 说明 -->
+    <section class="surface-card panel">
+      <div class="panel-title">空象限态与识别规则</div>
+      <div class="panel-note">空象限给出引导而非白格；象限识别以「文字全名 + 位置（重要↑、紧急←）」为主，四色顶线 / 圆点仅为辅助扫读。</div>
+
+      <section class="surface-card qcard q-nimp-nurg" aria-label="不重要不紧急（空态示例）" style="max-width:360px">
+        <div class="qhead"><span class="qdot"></span><h3>不重要不紧急</h3><span class="qverb">少做</span><span class="qcount num">0</span></div>
+        <div class="qbody">
+          <div class="q-empty">
+            <div class="ei"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h8"/></svg></div>
+            <div class="et">这个象限空着</div>
+            <div class="es">把卡片拖进来，或直接新建到此象限。</div>
+            <button class="q-add" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>新建到此象限</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="legend">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <span class="txt">四色（红 / 蓝 / 琥珀 / 灰）复用既有语义 fg 令牌，浅暗自动成对；颜色不单独承载语义，去色后仍能凭标题与位置区分四格与未分类。</span>
+      </div>
+    </section>
+  </div>
+
+  <div class="caption foot-note">跨端待办应用 · 四象限视图 · 令牌唯一事实源 DESIGN.md · 待办行 / 徽标复用 02 · 象限=important × urgent 两可空布尔 · 浅色/暗色成对</div>
+
+</div>
+</body>
+</html>
