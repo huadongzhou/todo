@@ -2,7 +2,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { nativeCommands } from "@/lib/native";
 import { writeDiagnostic } from "@/lib/diagnostics";
 import type { HabitProgress } from "@/bindings/commands";
-import type { RecurrenceFrequency, RecurrenceRule } from "@/types/todo";
+import type { RecurrenceFrequency, RecurrenceRule, Weekday } from "@/types/todo";
 
 /**
  * Recurrence view + generation helpers.
@@ -55,6 +55,106 @@ export function recurrenceLabel(rule: RecurrenceRule): string {
       // says "it repeats" rather than going blank.
       return "重复";
   }
+}
+
+/** The seven weekdays in the engine's Monday-first order, for a stable display. */
+const WEEKDAY_ORDER: readonly Weekday[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+
+/** One character per weekday — 一…日 — matching the editor's chip faces. */
+const WEEKDAY_SUMMARY_CHAR: Record<Weekday, string> = {
+  monday: "一",
+  tuesday: "二",
+  wednesday: "三",
+  thursday: "四",
+  friday: "五",
+  saturday: "六",
+  sunday: "日",
+};
+
+/**
+ * The whole rule as one readable line for the editor's inline echo — "每周一、
+ * 三、五，共 10 次", "农历每年，永不结束".
+ *
+ * Where {@link recurrenceLabel} says only the frequency band the list pill needs,
+ * this says everything the user set: it borrows that frequency band, then appends
+ * the weekday set, the day-of-month position and the end condition so the editor
+ * can show back exactly what the controls hold. Pure text like its neighbour, and
+ * for the same reason — UnoCSS does not scan `.ts`, so no colour or `dark:` class
+ * string lives here; the echo row's tone is a literal utility in the component.
+ *
+ * It is defensive about the two in-progress values a control can hold before it
+ * is a storable rule: an empty end date (kept as `""` so its radio stays chosen)
+ * reads as "永不结束", and a blank day-of-month drops the day rather than printing
+ * a `NaN`. The frequency-and-count blocking states are the field block's to
+ * report; the editor hides this line while one is showing, so it is never asked
+ * of an unreadable interval or count.
+ */
+export function recurrenceSummary(rule: RecurrenceRule): string {
+  let base = recurrenceLabel(rule);
+
+  if (rule.frequency === "weekly" && rule.weekdays.length > 0) {
+    base += weekdaySummary(rule.weekdays);
+  } else if (rule.frequency === "monthly") {
+    if (rule.onLastDay) {
+      base += "最后一天";
+    } else if (isMonthDay(rule.monthDay)) {
+      base += ` ${rule.monthDay} 日`;
+    }
+  }
+
+  return base + endSummary(rule);
+}
+
+/** "一、三、五" for a weekday set, always read in Monday-first order. */
+function weekdaySummary(weekdays: readonly Weekday[]): string {
+  return WEEKDAY_ORDER.filter((day) => weekdays.includes(day))
+    .map((day) => WEEKDAY_SUMMARY_CHAR[day])
+    .join("、");
+}
+
+/** The end clause: "，共 N 次" / "，截止 YYYY-MM-DD" / "，永不结束". */
+function endSummary(rule: RecurrenceRule): string {
+  if (typeof rule.count === "number" && Number.isInteger(rule.count) && rule.count >= 1) {
+    return `，共 ${rule.count} 次`;
+  }
+  if (typeof rule.until === "string" && rule.until.trim()) {
+    return `，截止 ${rule.until}`;
+  }
+  return "，永不结束";
+}
+
+/** A day-of-month a summary can print: a whole number in 1–31, never a blank NaN. */
+function isMonthDay(day: number | null | undefined): day is number {
+  return typeof day === "number" && Number.isInteger(day) && day >= 1 && day <= 31;
+}
+
+/**
+ * Whether a monthly or yearly rule anchored on `anchor` names a position the
+ * calendar never brings round again — a lunar leap month, a lunar 30th of a short
+ * month, a Gregorian February 31st. Answered by asking the engine, with the end
+ * condition stripped off (`until`/`count` removed) so a series that has simply run
+ * out of its counted occurrences is not mistaken for one whose position never
+ * recurs: `null` back from the engine then means only "no such date ever again".
+ *
+ * A non-Tauri runtime (browser dev) has no engine and cannot know, so it answers
+ * `false` — the same degrade as {@link nextOccurrence}, and the reason the caller
+ * must gate on the engine rather than reading a bare `null` as "never recurs".
+ */
+export async function recurrenceNeverRecursAgain(
+  rule: RecurrenceRule,
+  anchor: string,
+): Promise<boolean> {
+  if (!isTauri()) return false;
+  const probe: RecurrenceRule = { ...rule, until: null, count: null };
+  return (await nextOccurrence(probe, anchor, anchor)) === null;
 }
 
 /**

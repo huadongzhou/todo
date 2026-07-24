@@ -273,6 +273,16 @@ impl RecurrenceRule {
             return Err(ContractValidationError::InvalidRecurrence);
         }
 
+        // An end date and a count are both stopping conditions, and RFC 5545
+        // 3.3.10 forbids writing both: the .ics export (数据与同步/08) can keep
+        // only one and keeps the end date, so a rule carrying both would repeat
+        // one length in the app and another in an exported calendar. Refusing the
+        // pair here — the one chokepoint every stored or synced rule passes
+        // through — is what keeps the app, the engine and an export in agreement.
+        if self.until.is_some() && self.count.is_some() {
+            return Err(ContractValidationError::InvalidRecurrence);
+        }
+
         Ok(())
     }
 }
@@ -1118,6 +1128,49 @@ mod tests {
         last_day
             .validate()
             .expect("the last day of a month is valid");
+    }
+
+    #[test]
+    fn recurrence_refuses_an_end_date_and_a_count_at_once() {
+        // RFC 5545 3.3.10 forbids UNTIL and COUNT together, and the .ics export
+        // can write only one of the two (数据与同步/08 keeps the end date), so a
+        // rule carrying both would repeat one length in the app and another in an
+        // exported calendar. The single stopping condition is enforced here, at
+        // the one chokepoint every stored or synced rule passes through — either
+        // one alone, or neither, stays valid.
+        let base = RecurrenceRule {
+            frequency: RecurrenceFrequency::Daily,
+            interval: 1,
+            weekdays: Vec::new(),
+            month_day: None,
+            on_last_day: false,
+            calendar: RecurrenceCalendar::Gregorian,
+            until: None,
+            count: None,
+        };
+
+        let mut both = base.clone();
+        both.until = Some("2026-12-31".to_owned());
+        both.count = Some(10);
+        assert_eq!(
+            both.validate(),
+            Err(ContractValidationError::InvalidRecurrence)
+        );
+
+        let mut until_only = base.clone();
+        until_only.until = Some("2026-12-31".to_owned());
+        until_only
+            .validate()
+            .expect("an end date on its own is a valid stop");
+
+        let mut count_only = base.clone();
+        count_only.count = Some(10);
+        count_only
+            .validate()
+            .expect("a count on its own is a valid stop");
+
+        base.validate()
+            .expect("a rule with no stopping condition repeats for ever, which is valid");
     }
 
     #[test]

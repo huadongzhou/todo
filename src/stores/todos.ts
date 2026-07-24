@@ -32,6 +32,7 @@ export interface NewTodoInput {
   readonly startsAt?: string | null;
   readonly endsAt?: string | null;
   readonly estimatedMinutes?: number | null;
+  readonly recurrence?: RecurrenceRule | null;
 }
 
 /** The fields an edit may change. */
@@ -46,6 +47,7 @@ export type TodoEdit = Partial<
     | "startsAt"
     | "endsAt"
     | "estimatedMinutes"
+    | "recurrence"
   >
 >;
 
@@ -475,6 +477,7 @@ export const useTodoStore = defineStore("todos", () => {
       startsAt: fields.startsAt ?? null,
       endsAt: fields.endsAt ?? null,
       estimatedMinutes: fields.estimatedMinutes ?? null,
+      recurrence: fields.recurrence ?? null,
       // The list-valued fields have one empty value rather than two (`[]` and
       // "not set"), so a new todo starts with the empty one; the optional
       // scalars stay absent until something sets them.
@@ -508,6 +511,10 @@ export const useTodoStore = defineStore("todos", () => {
           startsAt: todo.startsAt,
           endsAt: todo.endsAt,
           estimatedMinutes: todo.estimatedMinutes,
+          // Carried so a task created with a repeat rule shows that rule on every
+          // other device; left out, the rule would live only on the device it was
+          // typed on — the gap the reminder once had on this same path.
+          recurrence: todo.recurrence,
         },
         todo.createdAt,
       ),
@@ -838,6 +845,13 @@ export const useTodoStore = defineStore("todos", () => {
     }
     if (patch.estimatedMinutes !== undefined) {
       planField(plan, "estimatedMinutes", todo.estimatedMinutes ?? null, patch.estimatedMinutes);
+    }
+    // The repeat rule travels like any other editable field. The editor hands
+    // back the very object it opened on when the rule was left untouched, so the
+    // identity check in `planField` reads that as "unchanged" and writes nothing;
+    // a rule the user changed is a new object and is written.
+    if (patch.recurrence !== undefined) {
+      planField(plan, "recurrence", todo.recurrence ?? null, patch.recurrence);
     }
 
     // An edit that writes the values already there is not an edit: writing it

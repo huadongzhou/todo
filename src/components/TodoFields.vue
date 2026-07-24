@@ -2,7 +2,7 @@
 import { toInstant, toLocalDateTimeInput } from "@/lib/datetime";
 import { MAX_NOTES_CHARS } from "@/lib/native";
 import { normalizeNotes, normalizeTitle } from "@/lib/todo-normalize";
-import type { Todo } from "@/types/todo";
+import type { RecurrenceRule, Todo, Weekday } from "@/types/todo";
 
 /**
  * What a create form or an inline editor is holding while the user fills it in.
@@ -26,6 +26,7 @@ export interface TodoDraft {
   startsAt: string | null;
   endsAt: string | null;
   estimatedMinutes: number | null;
+  recurrence: RecurrenceRule | null;
 }
 
 /** A blank draft. Containers reset by replacing the object, never field by field. */
@@ -39,6 +40,7 @@ export function createEmptyDraft(): TodoDraft {
     startsAt: null,
     endsAt: null,
     estimatedMinutes: null,
+    recurrence: null,
   };
 }
 
@@ -53,6 +55,7 @@ export function draftFromTodo(todo: Todo): TodoDraft {
     startsAt: todo.startsAt ?? null,
     endsAt: todo.endsAt ?? null,
     estimatedMinutes: todo.estimatedMinutes ?? null,
+    recurrence: todo.recurrence ?? null,
   };
 }
 
@@ -60,9 +63,38 @@ export function draftFromTodo(todo: Todo): TodoDraft {
  * Whether two drafts carry the same values. Written over the draft's own keys so
  * "did the user change anything" keeps working when a field is added, instead of
  * quietly comparing everything but the new one.
+ *
+ * Every key but `recurrence` holds a scalar, so `===` is the whole comparison;
+ * `recurrence` holds an object, which `===` compares by identity, so a draft
+ * opened on a recurring todo would read as "changed" the instant it was compared
+ * to itself — turning every save of such a todo into an empty write and an undo
+ * that undoes nothing. It alone is compared by structure.
  */
 export function isSameDraft(a: TodoDraft, b: TodoDraft): boolean {
-  return (Object.keys(a) as Array<keyof TodoDraft>).every((key) => a[key] === b[key]);
+  return (Object.keys(a) as Array<keyof TodoDraft>).every((key) =>
+    key === "recurrence" ? sameRecurrence(a.recurrence, b.recurrence) : a[key] === b[key],
+  );
+}
+
+/** Whether two repeat rules carry the same schedule, treating absent as `null`. */
+function sameRecurrence(a: RecurrenceRule | null, b: RecurrenceRule | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.frequency === b.frequency &&
+    a.interval === b.interval &&
+    a.calendar === b.calendar &&
+    a.onLastDay === b.onLastDay &&
+    (a.monthDay ?? null) === (b.monthDay ?? null) &&
+    (a.until ?? null) === (b.until ?? null) &&
+    (a.count ?? null) === (b.count ?? null) &&
+    sameWeekdays(a.weekdays, b.weekdays)
+  );
+}
+
+/** Weekday sets are equal when they hold the same days in the same order. */
+function sameWeekdays(a: readonly Weekday[], b: readonly Weekday[]): boolean {
+  return a.length === b.length && a.every((day, index) => day === b[index]);
 }
 
 /**
@@ -168,7 +200,11 @@ type FieldControl =
       readonly codec: FieldCodec;
     }
   | { readonly kind: "textarea"; readonly rows: number; readonly codec: FieldCodec }
-  | { readonly kind: "range"; readonly parts: readonly [RangePart, RangePart] };
+  | { readonly kind: "range"; readonly parts: readonly [RangePart, RangePart] }
+  // A whole object, not a string, and edited by its own sub-component: it does not
+  // go through a `codec` (which is string-in, string-out) but reads and writes
+  // `draft.recurrence` directly. One more control shape, one more template branch.
+  | { readonly kind: "recurrence" };
 
 /**
  * A length limit and when to start warning about it.
@@ -246,6 +282,27 @@ function estimateError(draft: TodoDraft): string | null {
 }
 
 /**
+ * What makes a repeat rule unstorable, in the terms the contract validates it in:
+ * an interval outside 1–999, or a "stop after N times" whose N is not a whole
+ * count. The other illegal combinations the contract refuses — a duplicated
+ * weekday, a day-of-month set together with "last day" — are made unreachable by
+ * the controls' own shape (a toggle set, a single select), so only these two
+ * reach here. The end-date-or-count exclusivity is a single radio group, so the
+ * pair the engine and the .ics export read differently can never both be set.
+ */
+function recurrenceError(draft: TodoDraft): string | null {
+  const rule = draft.recurrence;
+  if (!rule) return null;
+  if (!Number.isInteger(rule.interval) || rule.interval < 1 || rule.interval > 999) {
+    return "重复间隔请填写 1 到 999 之间的整数。";
+  }
+  if (rule.count != null && (!Number.isInteger(rule.count) || rule.count < 1)) {
+    return "重复次数请填写大于 0 的整数。";
+  }
+  return null;
+}
+
+/**
  * Every optional field the create界面 and the inline editor offer, in the order
  * the contract declares them. Adding one here is the whole change: the groups,
  * the layout, the reset, the submit and the validation all follow from it.
@@ -277,6 +334,19 @@ const FIELDS: readonly FieldDefinition[] = [
         (raw) => raw || null,
       ),
     },
+  },
+  {
+    // Placed right after the due date because a repeat is counted from it: the
+    // "无截止日" warning inside the control then reads next to the field it names.
+    // A whole object rather than a string, so it takes the `recurrence` shape and
+    // its own sub-component instead of a `codec`; full-width like the range, for
+    // the same reason — it is several controls, not one scalar.
+    key: "recurrence",
+    label: "重复",
+    group: "time",
+    span: "full",
+    control: { kind: "recurrence" },
+    error: recurrenceError,
   },
   {
     key: "reminderAt",
@@ -358,11 +428,12 @@ const FIELDS: readonly FieldDefinition[] = [
   },
 ];
 
-/** The draft keys one field owns: both halves for a range, one otherwise. */
+/** The draft keys one field owns: both halves for a range, its own otherwise. */
 function keysOf(field: FieldDefinition): FieldKey[] {
-  return field.control.kind === "range"
-    ? field.control.parts.map((part) => part.codec.key)
-    : [field.control.codec.key];
+  const control = field.control;
+  if (control.kind === "range") return control.parts.map((part) => part.codec.key);
+  if (control.kind === "recurrence") return ["recurrence"];
+  return [control.codec.key];
 }
 
 /** `dueDate` -> `<prefix>-due-date`, so an id reads like the label it belongs to. */
@@ -373,6 +444,7 @@ function fieldId(prefix: string, key: string): string {
 
 <script setup lang="ts">
 import { computed, nextTick, ref, toRaw, watch } from "vue";
+import RecurrenceField from "@/components/RecurrenceField.vue";
 import { announceFormAlert, clearFormAlert, retractFormAlert } from "@/lib/form-alert";
 import { MAX_TITLE_CHARS } from "@/lib/native";
 import type { PageAlert } from "@/lib/page-alert";
@@ -630,6 +702,16 @@ function onFieldInput(field: FieldDefinition, fieldCodec: FieldCodec, event: Eve
 }
 
 /**
+ * Writes the whole repeat rule, the object the recurrence sub-component hands
+ * back. Built from `pendingDraft` like every other write, so a rule changed in
+ * the same tick as another field is not built on the value from before it.
+ */
+function onRecurrenceChange(rule: RecurrenceRule | null): void {
+  commitDraft({ ...pendingDraft, recurrence: rule });
+  clearRejectionIfTouched();
+}
+
+/**
  * Validates on blur, but only once the field has held something: the create form
  * opens empty and blurring it is not a mistake. Nothing is announced here — the
  * user is moving focus, and a screen reader is already busy reading wherever
@@ -756,7 +838,10 @@ const visibleGroups = computed(() =>
       const error = field.error?.(draft.value) ?? null;
       const noteId = note ? `${id}-note` : null;
       const errorId = error ? `${id}-error` : null;
-      const single = control.kind === "range" ? null : control.codec;
+      // A range has two codecs and recurrence has none — neither reads as a
+      // single string — so both take the `null` path and the branch that draws them.
+      const single =
+        control.kind === "range" || control.kind === "recurrence" ? null : control.codec;
       const value = single ? single.read(draft.value) : "";
       const counter = field.maxChars ? counterFor(value, field.maxChars) : null;
       const counterId = counter ? `${id}-count` : null;
@@ -885,6 +970,21 @@ defineExpose({ validate, focusTitle });
                   </div>
                 </div>
               </fieldset>
+              <!--
+                Recurrence is a whole object edited by its own sub-component, not a
+                string in an <input>. The block stays ignorant of its shape: it
+                hands over the value, the anchor and the ids it needs, and reads
+                back a rule through the same commit path as any other field.
+              -->
+              <RecurrenceField
+                v-else-if="entry.kind === 'recurrence'"
+                :model-value="draft.recurrence"
+                :anchor="draft.dueDate"
+                :field-id="entry.id"
+                :error-id="entry.errorId"
+                :register-control="registerControl"
+                @update:model-value="onRecurrenceChange"
+              />
               <template v-else>
                 <div class="mb-1 flex items-baseline justify-between gap-2">
                   <label :for="entry.id" :class="LABEL_CLASS">{{ entry.field.label }}</label>

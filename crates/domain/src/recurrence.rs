@@ -30,11 +30,13 @@
 //! so that what the app shows and what an exported file expands to are the same
 //! series: the anchor is always the first occurrence (RFC 5545 treats `DTSTART`
 //! that way), weeks begin on Monday, a position the calendar does not have is
-//! skipped rather than moved, and an unreadable end date is no end date. The one
-//! place they cannot agree is a rule carrying both an end date and a count:
-//! RFC 5545 forbids writing both, so the export keeps the end date, while the
-//! contract states both as stopping conditions and this engine therefore stops
-//! at whichever comes first.
+//! skipped rather than moved, and an unreadable end date is no end date. An end
+//! date and a count are the one pair that could have disagreed — RFC 5545 forbids
+//! writing both and the export could keep only one — so the contract refuses a
+//! rule that carries both (`RecurrenceRule::validate`), and this engine, which
+//! validates before it walks, refuses it too. Each stopping condition still holds
+//! on its own, so the walk below reads `until` and `count` as two independent
+//! stops for the rules that carry one of them.
 
 use todo_contracts::{
     ContractValidationError, RecurrenceCalendar, RecurrenceFrequency, RecurrenceRule, Weekday,
@@ -930,27 +932,24 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_carrying_both_ends_stops_at_whichever_comes_first() {
-        // The contract states both as stopping conditions, so both hold. The
-        // calendar export can only write one of the two (RFC 5545 forbids both)
-        // and keeps the end date; a rule that carries both therefore repeats
-        // longer in an exported file than in the app.
-        let mut count_first = rule(RecurrenceFrequency::Daily);
-        count_first.until = Some("2026-12-31".to_owned());
-        count_first.count = Some(2);
+    fn a_rule_carrying_both_an_end_date_and_a_count_is_refused() {
+        // RFC 5545 3.3.10 forbids UNTIL and COUNT together and the .ics export
+        // can keep only one of them, so the contract refuses a rule that carries
+        // both (`RecurrenceRule::validate`). The engine validates before it walks
+        // (line one of `next_date`, as in `a_rule_the_contract_refuses_is_refused_here_too`),
+        // so it inherits that refusal rather than choosing a stopping condition of
+        // its own — the combination can no longer reach the app, an export or this
+        // walk. The `until` and `count` checks in `next_date` still each stop a
+        // rule that carries one of them alone.
+        let mut both = rule(RecurrenceFrequency::Daily);
+        both.until = Some("2026-12-31".to_owned());
+        both.count = Some(2);
 
         assert_eq!(
-            series(&count_first, "2026-07-23", 10),
-            ["2026-07-23", "2026-07-24"]
-        );
-
-        let mut date_first = rule(RecurrenceFrequency::Daily);
-        date_first.until = Some("2026-07-24".to_owned());
-        date_first.count = Some(99);
-
-        assert_eq!(
-            series(&date_first, "2026-07-23", 10),
-            ["2026-07-23", "2026-07-24"]
+            next_date_only(&both, "2026-07-23", "2026-07-23"),
+            Err(RecurrenceError::UnusableRule(
+                ContractValidationError::InvalidRecurrence
+            ))
         );
     }
 

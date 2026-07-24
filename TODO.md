@@ -12,7 +12,7 @@
 │   ├── 1.1 统一创建界面（产品定义：新建待办在一个界面完成全部设置）
 │   │   ├── ✅ 基础字段：标题 + 可选截止日、提醒时刻（统一创建容器 + 可展开详情区；字段块 TodoFields.vue 与行内编辑共用）
 │   │   ├── ✅ 时间段字段：可设起止时刻，不只截止日（起止一对为一个字段，结束早于/等于开始被拒；7.8 时间块规划复用）
-│   │   ├── ⏳ 周期设置：重复规则 每日 / 每周 / 每月 / 自定义间隔（联动 1.3）
+│   │   ├── ✅ 周期设置：重复规则 每日 / 每周 / 每月 / 每年 / 自定义间隔 / 指定星期几 / 月末 / 工作日（联动 1.3）（周期进 `TodoFields.vue` 声明式字段表新增 `recurrence` control 分支、委托子组件 `RecurrenceField.vue` 直接读写 `draft.recurrence`，`App.vue`/`TodoItem.vue` 零改动；渐进式显示按频率收放子控件；`until`/`count` 做成单一 radio group 三态使二者并存结构不可达——收敛引擎与 08 `.ics` 导出（只写 UNTIL）不一致的入口；月内位置单选使契约 month_day/on_last_day 并存态界面不可达；阻塞校验间隔 1–999、次数 ≥1 对齐契约 `RecurrenceRule::validate`；`isSameDraft` 对 recurrence 键改结构比较；`recurrence.ts` 新增 `recurrenceSummary` 内联回显（`recurrenceLabel` 仍供 08 列表 pill 不动）；闰月/永不复现位置以探针 `nextOccurrence(probe,anchor,anchor)===null` 显琥珀告警、无截止日锚点同步告警，均非阻塞，引擎仅 Tauri 可用、浏览器降级不显；契约层 `RecurrenceRule::validate` 补拒 `until`+`count` 并存，堵死界面/引擎/`.ics` 三方不一致的最后入口）
 │   │   ├── ⏳ 标签设置：多标签可选（联动 3.2）
 │   │   ├── ⏳ 象限设置：重要 × 紧急标记（联动 4.1）
 │   │   └── ⏳ 清单设置：归属清单可选（联动 13.2）
