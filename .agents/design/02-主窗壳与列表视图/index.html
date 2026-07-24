@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>主窗壳与列表视图 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 侧栏 / 输入底衬 */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --input-bg: #f1f5f9;       /* slate-100 输入底（App.vue CONTROL_CLASS bg-slate-100） */
+    --row-divider: #f1f5f9;    /* slate-100 行分隔（TodoItem border-slate-100） */
+    --circle-border: #cbd5e1;  /* slate-300 完成圈描边（TodoItem border-slate-300） */
+    --icon-muted: #94a3b8;     /* slate-400 复制/删除图标默认（text-slate-400） */
+    --icon-hover: #020617;     /* slate-950 图标 hover（dark 对应 slate-100） */
+    --danger-fg: #dc2626;      /* red-600 删除 hover 语义（TodoItem hover:text-red-600） */
+    /* ghost 按钮（Button.vue：text-slate-600 / hover:bg-slate-100 / hover:text-slate-950） */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（DESIGN.md 语义色，浅色「100 底 + 700 字」；与 01 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700（活动导航项 + 品牌 chip） */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --border: #1e293b;         /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --input-bg: #0f172a;       /* slate-900（dark:bg-slate-900） */
+    --row-divider: #1e293b;    /* slate-800（dark:border-slate-800） */
+    --circle-border: #475569;  /* slate-600（dark:border-slate-600） */
+    --icon-muted: #94a3b8;     /* slate-400（暗色默认仍 slate-400） */
+    --icon-hover: #f8fafc;     /* slate-100（dark:hover:text-slate-100） */
+    --danger-fg: #f87171;      /* red-400（暗色危险字，与 red-600 成对） */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+
+  /* ===== 抬头（与 01 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* ===== 应用窗（导航壳） ===== */
+  .app-window { display: flex; align-items: stretch; overflow: hidden; min-height: 760px; margin-bottom: 28px; }
+
+  /* 侧栏 */
+  .sidebar {
+    width: 256px; flex: none; background: var(--nested-bg);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 20px 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; }
+  .brand .logo {
+    width: 32px; height: 32px; border-radius: 8px; background: #0ea5e9;
+    display: flex; align-items: center; justify-content: center; color: #fff; flex: none;
+  }
+  .brand .name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand .name span { color: #0ea5e9; }
+
+  .side-cta {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; height: 44px; border: none; border-radius: 8px;
+    background: #0ea5e9; color: #fff; font-family: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; margin-bottom: 20px;
+  }
+
+  .nav-group { margin-bottom: 18px; }
+  .nav-label {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-secondary); padding: 0 10px; margin-bottom: 8px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; min-height: 44px;
+    padding: 8px 10px; border-radius: 8px; color: var(--text-secondary);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .nav-item .ic { color: currentColor; flex: none; }
+  .nav-item .lbl { flex: 1; min-width: 0; color: var(--text); }
+  .nav-item .cnt { font-size: 12px; color: var(--text-secondary); }
+  .nav-item.active { background: var(--info-bg); color: var(--info-fg); }
+  .nav-item.active .lbl { color: var(--info-fg); }
+  .nav-item.active .cnt { color: var(--info-fg); }
+
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 4px; }
+  .tag-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 9999px;
+    background: var(--normal-bg); color: var(--normal-fg);
+  }
+  .tag-chip .swatch { width: 8px; height: 8px; border-radius: 50%; }
+
+  .side-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
+
+  /* 主区 */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--card-bg); }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+  }
+  .segmented {
+    display: inline-flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--nested-bg);
+  }
+  .seg {
+    display: inline-flex; align-items: center; gap: 6px;
+    min-height: 44px; padding: 6px 18px; border-radius: 6px; border: none;
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+    background: transparent; color: var(--text-secondary);
+  }
+  .seg.active {
+    background: var(--card-bg); color: var(--text);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+  }
+  .dark .seg.active { background: #1e293b; } /* 暗色活动段用 slate-800 抬升，卡片=页面同色 */
+
+  .top-right { display: flex; align-items: center; gap: 12px; }
+  .sync { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+  .sync .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success-fg); flex: none; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--ghost-hover-bg); color: var(--icon-hover); }
+  .icon-btn.danger.is-hover { color: var(--danger-fg); }
+
+  .content { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* 提示条（与 01 alert 同款） */
+  .alert { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; }
+  .alert svg { flex: none; margin-top: 1px; }
+  .alert.info { background: var(--info-bg); color: var(--info-fg); }
+  .alert.success { background: var(--success-bg); color: var(--success-fg); }
+  .alert.error { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .alert.warn { background: var(--soon-bg); color: var(--soon-fg); }
+
+  /* 快速新增条 */
+  .quick-add { display: flex; align-items: center; gap: 8px; }
+  .qa-input {
+    flex: 1; min-width: 0; height: 44px; border: none; border-radius: 8px;
+    background: var(--input-bg); color: var(--text);
+    font-family: inherit; font-size: 14px; padding: 10px 14px; outline: none;
+    display: flex; align-items: center;
+  }
+  .qa-input .ph { color: var(--icon-muted); }
+  .qa-slider {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: 8px; border: none; background: transparent;
+    color: var(--ghost-text); cursor: pointer; flex: none;
+  }
+  .qa-add {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 44px; padding: 0 16px; border: none; border-radius: 8px;
+    background: #0ea5e9; color: #fff; font-family: inherit; font-size: 14px; font-weight: 500;
+    cursor: pointer; flex: none;
+  }
+
+  /* 日期分组 */
+  .group { display: flex; flex-direction: column; gap: 8px; }
+  .group-head { display: flex; align-items: baseline; gap: 8px; padding: 4px 2px; }
+  .group-name { font-size: 14px; font-weight: 600; color: var(--text); }
+  .group-name.overdue { color: var(--overdue-fg); }
+  .group-count { font-size: 12px; color: var(--text-secondary); }
+  .list { overflow: hidden; }
+
+  /* 待办行（逐字复刻 TodoItem.vue 展示态） */
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--row-divider); }
+  .row:last-child { border-bottom: none; }
+  .circle {
+    width: 24px; height: 24px; flex: none; border-radius: 50%;
+    border: 1px solid var(--circle-border); background: var(--card-bg);
+    display: flex; align-items: center; justify-content: center; color: #fff;
+  }
+  .circle.checked { background: #0ea5e9; border-color: #0ea5e9; }
+  .row-main { min-width: 0; flex: 1; }
+  .row-title { font-size: 16px; line-height: 1.4; color: #334155; } /* slate-700 正文；hover 加深见说明 */
+  .dark .row-title { color: #e2e8f0; }                                /* slate-200 */
+  .row-title.done { color: #94a3b8; text-decoration: line-through; }  /* slate-400 + 删除线 */
+  .dark .row-title.done { color: #64748b; }                           /* slate-500 */
+
+  .badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 500; padding: 2px 6px; border-radius: 6px;
+  }
+  .badge.tnum { font-variant-numeric: tabular-nums; }
+  .badge svg { flex: none; }
+  .badge.due-overdue { background: var(--overdue-bg); color: var(--overdue-fg); }
+  .badge.due-soon    { background: var(--soon-bg);    color: var(--soon-fg); }
+  .badge.due-normal  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .badge.pill-slate  { background: var(--normal-bg);  color: var(--normal-fg); }
+  .badge.pill-emerald{ background: var(--success-bg); color: var(--success-fg); }
+  /* 完成行的到期文字：无 tone（TONE_LABEL_CLASS.none = ""），呈默认正文色纯文本，无胶囊底 —— 忠实复刻现状 */
+  .due-plain { font-size: 12px; font-weight: 500; padding: 2px 6px; color: var(--text); }
+
+  .row-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+  /* 空状态（DESIGN 基准：还没有待办 + 回车引导；复用 01 empty 语言） */
+  .states { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .panel { padding: 24px; }
+  .panel-title { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .panel-note { font-size: 12px; color: var(--text-secondary); margin: 0 0 16px; }
+  .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; padding: 28px 16px; }
+  .empty .icon-wrap { color: var(--text-secondary); opacity: 0.7; }
+  .empty .et { font-size: 16px; font-weight: 600; }
+  .empty .es { font-size: 14px; color: var(--text-secondary); max-width: 300px; line-height: 1.5; }
+  .kbd-hint { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; color: var(--text-secondary); margin-top: 16px; }
+  kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+    border-radius: 6px; padding: 2px 6px;
+  }
+
+  .sync-legend { display: flex; flex-direction: column; gap: 10px; }
+  .sync-chip { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+  .sync-chip .lead-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .sync-chip .txt { color: var(--text-secondary); }
+  .sync-chip .txt b { color: var(--text); font-weight: 600; }
+
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+  .foot-note { text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>主窗壳与列表视图</h1>
+      <p class="lead">桌面主窗 · 任务/视图双段导航 + 侧栏 · 日期分组列表 · 待办行全形态 · 空态与告警</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <!-- ===== 应用窗：导航壳 + 分组列表（主态） ===== -->
+  <div class="surface-card app-window">
+
+    <!-- 侧栏 -->
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <span class="logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <span class="name">Just<span> Do</span></span>
+      </div>
+
+      <button class="side-cta" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+        新建任务
+      </button>
+
+      <nav class="nav-group" aria-label="清单">
+        <div class="nav-label">清单</div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="lbl">收件箱</span><span class="cnt num">4</span>
+        </div>
+        <div class="nav-item active" aria-current="page">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+          <span class="lbl">今天</span><span class="cnt num">6</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+          <span class="lbl">计划</span><span class="cnt num">12</span>
+        </div>
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+          <span class="lbl">已完成</span><span class="cnt num">38</span>
+        </div>
+      </nav>
+
+      <nav class="nav-group" aria-label="标签">
+        <div class="nav-label">标签</div>
+        <div class="tag-row">
+          <span class="tag-chip"><span class="swatch" style="background:#0ea5e9"></span>工作</span>
+          <span class="tag-chip"><span class="swatch" style="background:#10b981"></span>个人</span>
+          <span class="tag-chip"><span class="swatch" style="background:#f59e0b"></span>学习</span>
+        </div>
+      </nav>
+
+      <nav class="nav-group" aria-label="更多">
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+          <span class="lbl">成就</span>
+        </div>
+      </nav>
+
+      <div class="side-foot">
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+          <span class="lbl">设置</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主区 -->
+    <section class="main" aria-label="任务列表">
+      <div class="topbar">
+        <div class="segmented" role="tablist" aria-label="视图切换">
+          <button class="seg active" role="tab" aria-selected="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="m18 9 3 3-3 3"/></svg>
+            任务
+          </button>
+          <button class="seg" role="tab" aria-selected="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+            视图
+          </button>
+        </div>
+        <div class="top-right">
+          <span class="sync">
+            <span class="dot"></span>
+            已同步 · 3 分钟前
+          </span>
+          <button class="icon-btn" type="button" aria-label="立即同步">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <!-- 存储降级告警条（复用 01 的错误提示条：red 语义 + 图标 + 文字，不孤用颜色） -->
+        <div class="alert error" role="status">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span>本地存储将满，请清理已完成任务或开启同步。</span>
+        </div>
+
+        <!-- 顶部快速新增入口 -->
+        <div class="quick-add">
+          <div class="qa-input"><span class="ph">输入待办标题…</span></div>
+          <button class="qa-slider" type="button" aria-label="展开更多选项" aria-expanded="false">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+          </button>
+          <button class="qa-add" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            添加
+          </button>
+        </div>
+
+        <!-- 逾期组 -->
+        <div class="group">
+          <div class="group-head"><span class="group-name overdue">逾期</span><span class="group-count num">1</span></div>
+          <div class="surface-card list">
+            <div class="row">
+              <span class="circle"></span>
+              <div class="row-main">
+                <div class="row-title">提交季度预算表</div>
+                <div class="badges">
+                  <span class="badge due-overdue">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    逾期 2 天 · 已设提醒
+                  </span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="icon-btn" type="button" aria-label="复制 提交季度预算表">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+                <button class="icon-btn danger is-hover" type="button" aria-label="删除 提交季度预算表">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 今天组 -->
+        <div class="group">
+          <div class="group-head"><span class="group-name">今天</span><span class="group-count num">2</span></div>
+          <div class="surface-card list">
+            <!-- 今天到期 -->
+            <div class="row">
+              <span class="circle"></span>
+              <div class="row-main">
+                <div class="row-title">完成产品评审并同步团队</div>
+                <div class="badges">
+                  <span class="badge due-soon">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    今天 · 已设提醒
+                  </span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="icon-btn" type="button" aria-label="复制 完成产品评审并同步团队">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+                <button class="icon-btn" type="button" aria-label="删除 完成产品评审并同步团队">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+              </div>
+            </div>
+            <!-- 已完成（降对比 + 删除线 + 勾选圈；到期文字无 tone 呈纯文本，忠实复刻现状） -->
+            <div class="row">
+              <span class="circle checked">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <div class="row-main">
+                <div class="row-title done">晨间站会记录</div>
+                <div class="badges">
+                  <span class="due-plain">今天</span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="icon-btn" type="button" aria-label="复制 晨间站会记录">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+                <button class="icon-btn" type="button" aria-label="删除 晨间站会记录">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 明天组 -->
+        <div class="group">
+          <div class="group-head"><span class="group-name">明天</span><span class="group-count num">1</span></div>
+          <div class="surface-card list">
+            <!-- 带周期 + streak + 子任务进度 -->
+            <div class="row">
+              <span class="circle"></span>
+              <div class="row-main">
+                <div class="row-title">阅读 30 分钟</div>
+                <div class="badges">
+                  <span class="badge due-soon">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    明天
+                  </span>
+                  <span class="badge pill-slate">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+                    每天
+                  </span>
+                  <span class="badge pill-emerald">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+                    连续 5 天
+                  </span>
+                  <span class="badge pill-slate tnum">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
+                    2/3
+                  </span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="icon-btn" type="button" aria-label="复制 阅读 30 分钟">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+                <button class="icon-btn" type="button" aria-label="删除 阅读 30 分钟">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 本周组 -->
+        <div class="group">
+          <div class="group-head"><span class="group-name">本周</span><span class="group-count num">1</span></div>
+          <div class="surface-card list">
+            <!-- 普通行（normal 语义 slate 到期徽标） -->
+            <div class="row">
+              <span class="circle"></span>
+              <div class="row-main">
+                <div class="row-title">整理设计走查清单</div>
+                <div class="badges">
+                  <span class="badge due-normal">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                    3 天后
+                  </span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="icon-btn" type="button" aria-label="复制 整理设计走查清单">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+                <button class="icon-btn" type="button" aria-label="删除 整理设计走查清单">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 以后组 -->
+        <div class="group">
+          <div class="group-head"><span class="group-name">以后</span><span class="group-count num">1</span></div>
+          <div class="surface-card list">
+            <!-- 锁定依赖（lock 徽标 + 开始日期未到徽标，均 normal slate） -->
+            <div class="row">
+              <span class="circle"></span>
+              <div class="row-main">
+                <div class="row-title">发布 v1 上线公告</div>
+                <div class="badges">
+                  <span class="badge pill-slate tnum" title="依赖未完成：待“完成产品评审并同步团队”完成，解锁前不提醒">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    待前置完成
+                  </span>
+                  <span class="badge due-normal">7月30日开始</span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="icon-btn" type="button" aria-label="复制 发布 v1 上线公告">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+                <button class="icon-btn" type="button" aria-label="删除 发布 v1 上线公告">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== 状态板：空态 + 同步状态指示 ===== -->
+  <div class="states">
+    <!-- 空状态 -->
+    <section class="surface-card panel">
+      <div class="panel-title">空状态 · 列表为空</div>
+      <div class="panel-note">说明文案 + 回车快速添加引导，不留白屏（DESIGN 基准；复用 01 空态语言）。</div>
+      <!-- 顶部快速新增条同样在空态下常驻 -->
+      <div class="quick-add" style="margin-bottom:16px">
+        <div class="qa-input"><span class="ph">输入待办标题…</span></div>
+        <button class="qa-add" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          添加
+        </button>
+      </div>
+      <div class="surface-card" style="background:var(--card-bg)">
+        <div class="empty">
+          <div class="icon-wrap">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          </div>
+          <div class="et">还没有待办</div>
+          <div class="es">在上方输入标题、按回车快速添加你的第一个任务，随时随地保持进度。</div>
+        </div>
+      </div>
+      <div class="kbd-hint">
+        <span>使用</span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd><span>随时打开快速新增。</span>
+      </div>
+    </section>
+
+    <!-- 同步状态指示 + 告警条形态 -->
+    <section class="surface-card panel">
+      <div class="panel-title">同步状态指示</div>
+      <div class="panel-note">顶栏状态灯的四种取值，均带文字，不孤用颜色（数据与同步：状态/告警）。</div>
+      <div class="sync-legend">
+        <span class="sync-chip"><span class="lead-dot" style="background:var(--info-fg)"></span><span class="txt"><b>同步中…</b> 正在与服务端交换变更</span></span>
+        <span class="sync-chip"><span class="lead-dot" style="background:var(--success-fg)"></span><span class="txt"><b>已同步 · 3 分钟前</b> 已推送到全部设备</span></span>
+        <span class="sync-chip"><span class="lead-dot" style="background:var(--overdue-fg)"></span><span class="txt"><b>同步失败</b> 网络不可用，稍后自动重试</span></span>
+        <span class="sync-chip"><span class="lead-dot" style="background:var(--icon-muted)"></span><span class="txt"><b>尚未同步</b> 离线可用，联网后自动补传</span></span>
+      </div>
+
+      <div class="panel-title" style="font-size:14px;margin:20px 0 8px">告警条形态</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="alert error">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span>本地存储将满，请清理已完成任务或开启同步。</span>
+        </div>
+        <div class="alert success">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+          <span>已同步到全部设备。</span>
+        </div>
+        <div class="alert info">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <span>共 6 项待办，其中 1 项逾期、1 项今天到期。</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="caption foot-note">跨端待办应用 · 主窗壳与列表视图 · 令牌唯一事实源 DESIGN.md · 待办行逐字复刻 TodoItem.vue · 浅色/暗色成对</div>
+
+</div>
+</body>
+</html>
