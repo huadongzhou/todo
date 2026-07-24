@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>标签与清单管理 · 跨端待办应用</title>
+<script>
+  // 浅暗切换：location.search 含 "dark" 时给 <html> 加 class="dark"（与 01 / 02 / 03 同款）
+  if (location.search.indexOf("dark") !== -1) {
+    document.documentElement.classList.add("dark");
+  }
+</script>
+<style>
+  /* ===== 令牌变量（值逐字直取 DESIGN.md / 01 · 02 · 03 index.html，不另造） ===== */
+  :root {
+    --page-bg: #f8fafc;        /* slate-50 页面背景 */
+    --card-bg: #ffffff;        /* white 卡片表面 */
+    --nested-bg: #f8fafc;      /* slate-50 侧栏 / 输入底衬 */
+    --text: #0f172a;           /* slate-900 正文 */
+    --text-secondary: #475569; /* slate-600 次要 */
+    --border: #e2e8f0;         /* slate-200 边框 */
+    --ring-offset: #ffffff;    /* focus-ring offset（浅色 white） */
+    --input-bg: #f1f5f9;       /* slate-100 输入底（CONTROL_CLASS bg-slate-100） */
+    --opt-hover: #f8fafc;      /* slate-50 选项行 hover（RecurrenceField hover:bg-slate-50） */
+    --label: #64748b;          /* slate-500 表单 label（LABEL_CLASS text-slate-500） */
+    --row-divider: #f1f5f9;    /* slate-100 行分隔 */
+    --circle-border: #cbd5e1;  /* slate-300 完成圈描边 */
+    --icon-muted: #94a3b8;     /* slate-400 图标默认 */
+    --icon-hover: #020617;     /* slate-950 图标 hover */
+    --danger-fg: #dc2626;      /* red-600 删除 hover 语义 */
+    /* ghost 按钮（Button.vue：text-slate-600 / hover:bg-slate-100 / hover:text-slate-950） */
+    --ghost-text: #475569;
+    --ghost-hover-bg: #f1f5f9;
+    --ghost-hover-text: #020617;
+    /* 语义底/字（DESIGN.md 语义色，浅色「100 底 + 700 字」；与 01 · 02 · 03 逐字一致） */
+    --overdue-bg: #fee2e2; --overdue-fg: #b91c1c;   /* red-100 / red-700 */
+    --soon-bg: #fef3c7;    --soon-fg: #b45309;      /* amber-100 / amber-700 */
+    --normal-bg: #f1f5f9;  --normal-fg: #475569;    /* slate-100 / slate-600 */
+    --success-bg: #d1fae5; --success-fg: #047857;   /* emerald-100 / emerald-700 */
+    --info-bg: #e0f2fe;    --info-fg: #0369a1;      /* sky-100 / sky-700 */
+    /* 头像底（中性 slate，令牌内派生，非新色系） */
+    --avatar-bg: #e2e8f0;  --avatar-fg: #475569;    /* slate-200 / slate-600 */
+    /* 标签分类色（占位：既有语义 hue -500 档，与 02 · 03 swatch 逐字一致；见页脚待决说明） */
+    --cat-sky: #0ea5e9;      /* sky-500 */
+    --cat-emerald: #10b981;  /* emerald-500 */
+    --cat-amber: #f59e0b;    /* amber-500 */
+    --cat-red: #ef4444;      /* red-500 */
+    --cat-slate: #64748b;    /* slate-500 */
+  }
+  .dark {
+    --page-bg: #020617;        /* slate-950 */
+    --card-bg: #020617;        /* 暗色卡片=slate-950，靠边框区分层级 */
+    --nested-bg: #0f172a;      /* slate-900 */
+    --text: #e2e8f0;           /* slate-200 */
+    --text-secondary: #cbd5e1; /* slate-300 */
+    --border: #1e293b;         /* slate-800 */
+    --ring-offset: #020617;    /* slate-950 */
+    --input-bg: #0f172a;       /* slate-900（dark:bg-slate-900） */
+    --opt-hover: #0f172a;      /* slate-900（dark:hover:bg-slate-900） */
+    --label: #94a3b8;          /* slate-400（dark:text-slate-400） */
+    --row-divider: #1e293b;    /* slate-800 */
+    --circle-border: #475569;  /* slate-600 */
+    --icon-muted: #94a3b8;     /* slate-400 */
+    --icon-hover: #f8fafc;     /* slate-100 */
+    --danger-fg: #f87171;      /* red-400 */
+    --ghost-text: #cbd5e1;     /* slate-300 */
+    --ghost-hover-bg: #1e293b; /* slate-800 */
+    --ghost-hover-text: #f8fafc;
+    /* 暗色「900/40 底 + 300 字」 */
+    --overdue-bg: rgba(127,29,29,0.4);  --overdue-fg: #fca5a5;  /* red-900/40 / red-300 */
+    --soon-bg: rgba(120,53,15,0.4);     --soon-fg: #fcd34d;     /* amber-900/40 / amber-300 */
+    --normal-bg: #1e293b;               --normal-fg: #cbd5e1;   /* slate-800 / slate-300 */
+    --success-bg: rgba(6,78,59,0.4);    --success-fg: #6ee7b7;  /* emerald-900/40 / emerald-300 */
+    --info-bg: rgba(12,74,110,0.4);     --info-fg: #7dd3fc;     /* sky-900/40 / sky-300 */
+    --avatar-bg: #1e293b;  --avatar-fg: #cbd5e1;    /* slate-800 / slate-300 */
+    /* 标签分类色暗色不反色，保持 hue 一致（swatch 为色点，两模式同 hex，与 02 · 03 一致） */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .artboard { width: 1280px; margin: 0 auto; padding: 40px; background: var(--page-bg); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .surface-card {
+    border-radius: 12px;             /* rounded-xl */
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); /* shadow-sm（唯一一档） */
+  }
+
+  /* ===== 抬头（与 01 · 02 · 03 masthead 同款） ===== */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .lead { font-size: 16px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--nested-bg); color: var(--text);
+  }
+  .mode-badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .light-only { display: inline; } .dark-only { display: none; }
+  .dark .light-only { display: none; } .dark .dark-only { display: inline; }
+
+  /* 区块标题条（与 01 · 03 section-title 同款） */
+  .section-title { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 16px; }
+  .section-title .idx {
+    font-size: 12px; font-weight: 600; color: #fff; background: #0ea5e9;
+    border-radius: 6px; padding: 2px 8px; letter-spacing: 0.04em;
+  }
+  .section-title h2 { font-size: 24px; line-height: 1.25; font-weight: 600; margin: 0; }
+  .section-title .sub { font-size: 12px; color: var(--text-secondary); }
+  .caption { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+
+  /* 网格布局 */
+  .cols { display: grid; gap: 24px; margin-bottom: 28px; }
+  .cols.a { grid-template-columns: 1.5fr 1fr; }
+  .cols.b { grid-template-columns: 300px 1fr; }
+  .cols.c { grid-template-columns: 1.4fr 1fr; }
+  .stack { display: grid; gap: 24px; align-content: start; }
+
+  .panel { padding: 20px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .panel-title { font-size: 18px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .panel-title .cnt { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+  .panel-note { font-size: 12px; color: var(--text-secondary); margin: 2px 0 16px; line-height: 1.5; }
+
+  /* 主按钮 / ghost / 图标按钮（逐字复用组件基准） */
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px;
+    padding: 8px 14px; border: none; border-radius: 8px; background: #0ea5e9; color: #fff;
+    font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .btn-ghost {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px;
+    padding: 8px 12px; border: none; border-radius: 8px; background: transparent; color: var(--ghost-text);
+    font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .btn-ghost.is-hover { background: var(--ghost-hover-bg); color: var(--ghost-hover-text); }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer; flex: none;
+  }
+  .icon-btn.is-hover { background: var(--ghost-hover-bg); color: var(--icon-hover); }
+  .icon-btn.danger.is-hover { color: var(--danger-fg); }
+
+  /* 控件（逐字对齐 CONTROL_CLASS：min-h-11 rounded-lg 无边框 bg-slate-100） */
+  .ctrl {
+    display: flex; align-items: center; gap: 8px; min-height: 44px; width: 100%;
+    border-radius: 8px; border: none; background: var(--input-bg); color: var(--text);
+    font-family: inherit; font-size: 14px; padding: 10px 12px; outline: none;
+  }
+  .ctrl .ph { color: var(--icon-muted); }
+  .ctrl .val { flex: 1; min-width: 0; }
+  .ctrl .adorn { color: var(--icon-muted); flex: none; }
+  .ctrl.is-focus { box-shadow: 0 0 0 2px var(--input-bg), 0 0 0 4px #0ea5e9; } /* focus:ring-2 ring-sky-500 */
+  select.ctrl { -webkit-appearance: none; appearance: none; }
+
+  /* ===== 标签管理行 ===== */
+  .tag-list { display: flex; flex-direction: column; }
+  .tag-row {
+    display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+    border-radius: 8px; min-height: 52px;
+  }
+  .tag-row + .tag-row { border-top: 1px solid var(--row-divider); border-radius: 0; }
+  .tag-row.is-hover { background: var(--opt-hover); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .tag-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; color: var(--text); }
+  .tag-count {
+    font-size: 12px; font-weight: 500; color: var(--normal-fg); background: var(--normal-bg);
+    border-radius: 9999px; padding: 2px 8px; font-variant-numeric: tabular-nums; flex: none;
+  }
+  .tag-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+  .row-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent;
+    color: var(--icon-muted); cursor: pointer;
+  }
+  .row-icon-btn.is-hover { background: var(--ghost-hover-bg); color: var(--icon-hover); }
+  .row-icon-btn.danger.is-hover { color: var(--danger-fg); }
+
+  /* 编辑态行（改名 + 改色调色板） */
+  .tag-edit {
+    border: 1px solid #0ea5e9; border-radius: 10px; padding: 14px; display: grid; gap: 12px;
+    background: var(--card-bg);
+  }
+  .edit-line { display: flex; align-items: center; gap: 10px; }
+  .edit-line .ctrl { flex: 1; }
+  .swatch-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sw-label { font-size: 12px; font-weight: 500; color: var(--label); }
+  .sw {
+    width: 28px; height: 28px; border-radius: 9999px; border: 2px solid transparent; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; color: #fff; position: relative;
+  }
+  .sw.sel { box-shadow: 0 0 0 2px var(--ring-offset), 0 0 0 4px #0ea5e9; }
+  .sw svg { display: none; } .sw.sel svg { display: block; }
+  .edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+
+  /* 新建标签输入行 */
+  .add-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--row-divider); }
+  .add-row .ctrl { flex: 1; }
+
+  /* 过滤 / 统计卡 */
+  .filter-active {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px;
+    background: var(--info-bg); color: var(--info-fg); font-size: 14px; font-weight: 500;
+  }
+  .filter-active .x { margin-left: auto; display: inline-flex; cursor: pointer; }
+  .stat-list { display: grid; gap: 10px; margin-top: 14px; }
+  .stat-row { display: flex; align-items: center; gap: 10px; }
+  .stat-row .name { font-size: 14px; color: var(--text); display: flex; align-items: center; gap: 8px; min-width: 96px; }
+  .bar-track { flex: 1; height: 8px; border-radius: 9999px; background: var(--input-bg); overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 9999px; }
+  .stat-row .val { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; width: 40px; text-align: right; }
+
+  /* ===== 侧栏（深化 02 侧栏；清单 + 共享 + 新建） ===== */
+  .sidebar {
+    background: var(--nested-bg); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; padding: 18px 14px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
+  .brand .logo {
+    width: 30px; height: 30px; border-radius: 8px; background: #0ea5e9;
+    display: flex; align-items: center; justify-content: center; color: #fff; flex: none;
+  }
+  .brand .name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand .name span { color: #0ea5e9; }
+  .nav-group { margin-bottom: 16px; }
+  .nav-label {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-secondary); padding: 0 8px; margin-bottom: 8px;
+  }
+  .nav-label .add-mini {
+    display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+    border-radius: 6px; border: none; background: transparent; color: var(--icon-muted); cursor: pointer;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; min-height: 40px;
+    padding: 6px 8px; border-radius: 8px; color: var(--text-secondary);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .nav-item .ic { color: currentColor; flex: none; }
+  .nav-item .swd { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .nav-item .lbl { flex: 1; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-item .cnt { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .nav-item.is-hover { background: var(--ghost-hover-bg); }
+  .nav-item.active { background: var(--info-bg); color: var(--info-fg); }
+  .nav-item.active .lbl { color: var(--info-fg); }
+  .nav-item.active .cnt { color: var(--info-fg); }
+  .share-mark { display: inline-flex; align-items: center; color: var(--info-fg); flex: none; }
+  .mini-avatars { display: inline-flex; align-items: center; flex: none; }
+  .mini-avatars .av {
+    width: 20px; height: 20px; border-radius: 50%; background: var(--avatar-bg); color: var(--avatar-fg);
+    border: 2px solid var(--nested-bg); display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600; margin-left: -6px;
+  }
+  .mini-avatars .av:first-child { margin-left: 0; }
+  .side-add {
+    display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 6px 8px;
+    border-radius: 8px; border: 1px dashed var(--border); background: var(--card-bg);
+  }
+  .side-add .ctrl { min-height: 32px; padding: 4px 8px; background: transparent; }
+
+  /* 归属操作弹层 */
+  .move-menu { border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); overflow: hidden; }
+  .move-menu .mm-head { padding: 12px 14px; border-bottom: 1px solid var(--row-divider); font-size: 12px; font-weight: 600; color: var(--label); }
+  .opt-row {
+    display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; cursor: pointer;
+  }
+  .opt-row.is-hover { background: var(--opt-hover); }
+  .opt-row input { accent-color: #0ea5e9; width: 18px; height: 18px; flex: none; }
+  .opt-row .swd { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .opt-row .opt-lbl { font-size: 14px; color: var(--text); flex: 1; }
+  .opt-row .opt-cnt { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+  /* 提示条（与 01 · 02 · 03 alert 同款） */
+  .alert { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; }
+  .alert svg { flex: none; margin-top: 1px; }
+  .alert.info { background: var(--info-bg); color: var(--info-fg); }
+  .alert.warn { background: var(--soon-bg); color: var(--soon-fg); }
+  .alert.error { background: var(--overdue-bg); color: var(--overdue-fg); }
+
+  /* ===== 共享清单卡 ===== */
+  .share-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .share-title { display: flex; align-items: center; gap: 10px; }
+  .share-title .swd { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .share-title .t { font-size: 18px; font-weight: 600; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500;
+    padding: 2px 8px; border-radius: 9999px;
+  }
+  .badge.info { background: var(--info-bg); color: var(--info-fg); }
+  .badge.normal { background: var(--normal-bg); color: var(--normal-fg); }
+  .badge.success { background: var(--success-bg); color: var(--success-fg); }
+  .badge svg { flex: none; }
+
+  .member-list { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; }
+  .member { display: flex; align-items: center; gap: 12px; padding: 10px 4px; }
+  .member + .member { border-top: 1px solid var(--row-divider); }
+  .avatar {
+    width: 36px; height: 36px; border-radius: 50%; background: var(--avatar-bg); color: var(--avatar-fg);
+    display: inline-flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; flex: none;
+  }
+  .m-main { flex: 1; min-width: 0; }
+  .m-name { font-size: 14px; font-weight: 500; color: var(--text); display: flex; align-items: center; gap: 6px; }
+  .m-you { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+  .m-sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+  .role-select {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 10px;
+    border-radius: 8px; background: var(--input-bg); color: var(--text-secondary);
+    font-size: 13px; font-weight: 500; cursor: pointer; flex: none;
+  }
+  .role-static { font-size: 13px; font-weight: 500; color: var(--text-secondary); padding: 6px 10px; flex: none; }
+
+  .invite-row { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--row-divider); }
+  .invite-row .ctrl { flex: 1; }
+
+  /* 个人态 vs 共享态 对照 */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .cmp-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: var(--card-bg); }
+  .cmp-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+  .cmp-head .swd { width: 10px; height: 10px; border-radius: 50%; }
+  .cmp-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); padding: 4px 0; }
+  .cmp-line svg { flex: none; color: var(--icon-muted); }
+  .cmp-avs { display: inline-flex; margin-left: auto; }
+  .cmp-avs .av { width: 20px; height: 20px; border-radius: 50%; background: var(--avatar-bg); color: var(--avatar-fg);
+    border: 2px solid var(--card-bg); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; margin-left: -6px; }
+  .cmp-avs .av:first-child { margin-left: 0; }
+
+  /* 空状态（复用 01 · 02 empty 语言） */
+  .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; padding: 26px 16px; }
+  .empty .icon-wrap { color: var(--text-secondary); opacity: 0.7; }
+  .empty .et { font-size: 16px; font-weight: 600; }
+  .empty .es { font-size: 14px; color: var(--text-secondary); max-width: 280px; line-height: 1.5; }
+
+  /* 待决标注（复用 01 pending：amber 语义底 + 图标 + 文字） */
+  .pending {
+    display: flex; gap: 12px; margin-top: 4px; padding: 12px 16px; border-radius: 8px;
+    background: var(--soon-bg); border: 1px solid rgba(180,83,9,0.25);
+  }
+  .dark .pending { border-color: rgba(252,211,77,0.25); }
+  .pending svg { color: var(--soon-fg); flex: none; margin-top: 1px; }
+  .pending .txt { font-size: 12px; line-height: 1.55; color: var(--soon-fg); }
+  .pending .txt b { font-weight: 700; }
+
+  .foot-note { text-align: center; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="artboard">
+
+  <!-- 抬头 -->
+  <div class="surface-card masthead">
+    <div>
+      <h1>标签与清单管理</h1>
+      <p class="lead">标签管理（增删改色 + 筛选统计）· 清单侧栏与单归属归类 · 共享清单成员/指派/权限 · 浅暗成对</p>
+    </div>
+    <div class="mode-badge">
+      <span class="dot" style="background:#0ea5e9"></span>
+      <span class="light-only">浅色 Light</span>
+      <span class="dark-only">暗色 Dark</span>
+    </div>
+  </div>
+
+  <!-- ===================== 区块一：标签管理 ===================== -->
+  <div class="section-title"><span class="idx">标签</span><h2>标签管理</h2><span class="sub">名称 + 分类色 + 计数 · 增删改色 · 筛选/统计入口</span></div>
+  <div class="cols a">
+
+    <!-- 标签列表 + 编辑态 + 新建 -->
+    <section class="surface-card panel">
+      <div class="panel-head">
+        <h3 class="panel-title">全部标签 <span class="cnt num">5</span></h3>
+        <button type="button" class="btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          新建标签
+        </button>
+      </div>
+      <p class="panel-note">悬停显示改色 / 重命名 / 删除；计数为该标签下的未完成任务数，点击行即按标签筛选。</p>
+
+      <div class="tag-list">
+        <!-- 普通行 -->
+        <div class="tag-row">
+          <span class="dot" style="background:var(--cat-sky)"></span>
+          <span class="tag-name">工作</span>
+          <span class="tag-count">12</span>
+          <div class="tag-actions">
+            <button type="button" class="row-icon-btn" aria-label="按标签筛选 工作">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn" aria-label="重命名 工作">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn danger" aria-label="删除 工作">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 悬停行 -->
+        <div class="tag-row is-hover">
+          <span class="dot" style="background:var(--cat-emerald)"></span>
+          <span class="tag-name">个人</span>
+          <span class="tag-count">8</span>
+          <div class="tag-actions">
+            <button type="button" class="row-icon-btn is-hover" aria-label="按标签筛选 个人">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn" aria-label="重命名 个人">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn danger" aria-label="删除 个人">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 编辑态行（重命名 + 改色调色板，选中 amber） -->
+        <div style="padding:8px 0;">
+          <div class="tag-edit" role="group" aria-label="编辑标签 学习">
+            <div class="edit-line">
+              <span class="dot" style="background:var(--cat-amber)"></span>
+              <div class="ctrl is-focus"><span class="val">学习</span></div>
+            </div>
+            <div class="swatch-picker" role="radiogroup" aria-label="分类色">
+              <span class="sw-label">分类色</span>
+              <button type="button" class="sw" role="radio" aria-checked="false" aria-label="sky" style="background:var(--cat-sky)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button type="button" class="sw" role="radio" aria-checked="false" aria-label="emerald" style="background:var(--cat-emerald)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button type="button" class="sw sel" role="radio" aria-checked="true" aria-label="amber" style="background:var(--cat-amber)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button type="button" class="sw" role="radio" aria-checked="false" aria-label="red" style="background:var(--cat-red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button type="button" class="sw" role="radio" aria-checked="false" aria-label="slate" style="background:var(--cat-slate)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+            </div>
+            <div class="edit-actions">
+              <button type="button" class="btn-ghost">取消</button>
+              <button type="button" class="btn-primary" style="min-height:40px">保存</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 普通行 -->
+        <div class="tag-row">
+          <span class="dot" style="background:var(--cat-red)"></span>
+          <span class="tag-name">家庭</span>
+          <span class="tag-count">3</span>
+          <div class="tag-actions">
+            <button type="button" class="row-icon-btn" aria-label="按标签筛选 家庭">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn" aria-label="重命名 家庭">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn danger" aria-label="删除 家庭">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 普通行 -->
+        <div class="tag-row">
+          <span class="dot" style="background:var(--cat-slate)"></span>
+          <span class="tag-name">杂项</span>
+          <span class="tag-count">2</span>
+          <div class="tag-actions">
+            <button type="button" class="row-icon-btn" aria-label="按标签筛选 杂项">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn" aria-label="重命名 杂项">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>
+            </button>
+            <button type="button" class="row-icon-btn danger" aria-label="删除 杂项">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 新建标签输入行 -->
+      <div class="add-row">
+        <div class="ctrl">
+          <svg class="adorn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>
+          <span class="ph">输入新标签名称…</span>
+        </div>
+        <button type="button" class="btn-ghost is-hover">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          添加
+        </button>
+      </div>
+    </section>
+
+    <!-- 右列：筛选统计 + 空态 -->
+    <div class="stack">
+      <section class="surface-card panel">
+        <div class="panel-head"><h3 class="panel-title">标签筛选与统计</h3></div>
+        <p class="panel-note">选中标签后主列表按该标签过滤；统计条显示各标签的未完成占比。</p>
+        <div class="filter-active">
+          <span class="dot" style="background:var(--cat-sky)"></span>
+          正在筛选：工作 · 12 项
+          <span class="x" role="button" aria-label="清除筛选">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </span>
+        </div>
+        <div class="stat-list">
+          <div class="stat-row">
+            <span class="name"><span class="dot" style="background:var(--cat-sky)"></span>工作</span>
+            <span class="bar-track"><span class="bar-fill" style="width:100%;background:var(--cat-sky)"></span></span>
+            <span class="val">12</span>
+          </div>
+          <div class="stat-row">
+            <span class="name"><span class="dot" style="background:var(--cat-emerald)"></span>个人</span>
+            <span class="bar-track"><span class="bar-fill" style="width:67%;background:var(--cat-emerald)"></span></span>
+            <span class="val">8</span>
+          </div>
+          <div class="stat-row">
+            <span class="name"><span class="dot" style="background:var(--cat-amber)"></span>学习</span>
+            <span class="bar-track"><span class="bar-fill" style="width:42%;background:var(--cat-amber)"></span></span>
+            <span class="val">5</span>
+          </div>
+          <div class="stat-row">
+            <span class="name"><span class="dot" style="background:var(--cat-red)"></span>家庭</span>
+            <span class="bar-track"><span class="bar-fill" style="width:25%;background:var(--cat-red)"></span></span>
+            <span class="val">3</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 空态：无标签 -->
+      <section class="surface-card panel">
+        <div class="panel-head"><h3 class="panel-title">空态 · 还没有标签</h3></div>
+        <div class="empty">
+          <div class="icon-wrap">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>
+          </div>
+          <div class="et">还没有标签</div>
+          <div class="es">用标签给任务加多维归类，一个任务可贴多个标签。</div>
+          <button type="button" class="btn-primary" style="margin-top:2px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            新建第一个标签
+          </button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ===================== 区块二：清单侧栏与归属 ===================== -->
+  <div class="section-title"><span class="idx">清单</span><h2>清单侧栏与归属</h2><span class="sub">清单列表 + 新建 · 单归属约束 · 移动到清单</span></div>
+  <div class="cols b">
+
+    <!-- 侧栏（深化 02） -->
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <span class="logo">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <span class="name">Just<span> Do</span></span>
+      </div>
+
+      <nav class="nav-group" aria-label="清单">
+        <div class="nav-label">
+          <span>清单</span>
+          <button type="button" class="add-mini" aria-label="新建清单">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          </button>
+        </div>
+        <!-- 收件箱：默认清单（未归属即此） -->
+        <div class="nav-item">
+          <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="lbl">收件箱</span><span class="cnt num">4</span>
+        </div>
+        <!-- 活动清单 -->
+        <div class="nav-item active" aria-current="page">
+          <span class="swd" style="background:var(--cat-sky)"></span>
+          <span class="lbl">工作</span><span class="cnt num">12</span>
+        </div>
+        <div class="nav-item">
+          <span class="swd" style="background:var(--cat-emerald)"></span>
+          <span class="lbl">个人</span><span class="cnt num">8</span>
+        </div>
+        <div class="nav-item">
+          <span class="swd" style="background:var(--cat-amber)"></span>
+          <span class="lbl">购物清单</span><span class="cnt num">3</span>
+        </div>
+        <!-- 新建清单输入态 -->
+        <div class="side-add">
+          <span class="swd" style="width:10px;height:10px;border-radius:50%;background:var(--cat-slate);flex:none"></span>
+          <div class="ctrl"><span class="ph">清单名称…</span></div>
+          <button type="button" class="add-mini" aria-label="确认新建清单">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+        </div>
+      </nav>
+
+      <nav class="nav-group" aria-label="共享清单">
+        <div class="nav-label"><span>共享清单</span></div>
+        <div class="nav-item">
+          <span class="swd" style="background:var(--cat-red)"></span>
+          <span class="lbl">家庭采买</span>
+          <span class="mini-avatars">
+            <span class="av">我</span><span class="av">林</span><span class="av">陈</span>
+          </span>
+        </div>
+        <div class="nav-item">
+          <span class="swd" style="background:var(--cat-slate)"></span>
+          <span class="lbl">项目 Alpha</span>
+          <span class="share-mark" aria-label="共享清单">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </span>
+        </div>
+      </nav>
+    </aside>
+
+    <!-- 右列：归属操作 + 单归属约束 + 空态 -->
+    <div class="stack">
+      <section class="surface-card panel">
+        <div class="panel-head"><h3 class="panel-title">归属操作 · 移动到清单</h3></div>
+        <p class="panel-note">在任务上「移动到清单」为单选（radio），任务同一时刻只属于一个清单；选「收件箱」即从当前清单移出。</p>
+        <div class="move-menu">
+          <div class="mm-head">移动「完成产品评审并同步团队」到</div>
+          <label class="opt-row">
+            <input type="radio" name="move-list" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--icon-muted);flex:none"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            <span class="opt-lbl">收件箱</span><span class="opt-cnt num">4</span>
+          </label>
+          <label class="opt-row is-hover">
+            <input type="radio" name="move-list" checked />
+            <span class="swd" style="background:var(--cat-sky)"></span>
+            <span class="opt-lbl">工作</span><span class="opt-cnt num">12</span>
+          </label>
+          <label class="opt-row">
+            <input type="radio" name="move-list" />
+            <span class="swd" style="background:var(--cat-emerald)"></span>
+            <span class="opt-lbl">个人</span><span class="opt-cnt num">8</span>
+          </label>
+          <label class="opt-row">
+            <input type="radio" name="move-list" />
+            <span class="swd" style="background:var(--cat-amber)"></span>
+            <span class="opt-lbl">购物清单</span><span class="opt-cnt num">3</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- 单归属约束提示 + 删除清单去向 -->
+      <section class="surface-card panel">
+        <div class="panel-head"><h3 class="panel-title">单归属约束</h3></div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="alert info" role="note">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span>每个任务只属于一个清单（单归属）；需要多维归类请改用标签。</span>
+          </div>
+          <div class="alert warn" role="note">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>删除清单「购物清单」后，其中 3 个任务将移回收件箱，不会被删除。</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 空态：无清单 -->
+      <section class="surface-card panel">
+        <div class="panel-head"><h3 class="panel-title">空态 · 还没有自定义清单</h3></div>
+        <div class="empty">
+          <div class="icon-wrap">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+          </div>
+          <div class="et">全部任务都在收件箱</div>
+          <div class="es">新建清单把任务按项目或场景分组，每个任务归属一个清单。</div>
+          <button type="button" class="btn-primary" style="margin-top:2px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            新建清单
+          </button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ===================== 区块三：共享清单 ===================== -->
+  <div class="section-title"><span class="idx">共享</span><h2>共享清单</h2><span class="sub">成员 / 指派 / 权限 · 共享态与个人态区分 · 邀请入口</span></div>
+  <div class="cols c">
+
+    <!-- 共享清单主卡：成员 + 权限 + 指派 + 邀请 -->
+    <section class="surface-card panel">
+      <div class="share-head">
+        <div>
+          <div class="share-title">
+            <span class="swd" style="background:var(--cat-red)"></span>
+            <span class="t">家庭采买</span>
+            <span class="badge info">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              共享 · 3 人
+            </span>
+          </div>
+          <p class="panel-note" style="margin-top:6px">拥有者可管理成员与权限；指派把某任务分派给指定成员，共享态任务行显示指派头像。</p>
+        </div>
+        <button type="button" class="btn-primary" style="flex:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>
+          邀请成员
+        </button>
+      </div>
+
+      <ul class="member-list">
+        <li class="member">
+          <span class="avatar">我</span>
+          <div class="m-main">
+            <div class="m-name">王胜 <span class="m-you">（你）</span></div>
+            <div class="m-sub">
+              <span class="badge success">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l4 6-10 13L2 9Z"/><path d="M11 3 8 9l4 13 4-13-3-6"/><path d="M2 9h20"/></svg>
+                拥有者
+              </span>
+              <span>指派 4 项</span>
+            </div>
+          </div>
+          <span class="role-static">全部权限</span>
+        </li>
+        <li class="member">
+          <span class="avatar">林</span>
+          <div class="m-main">
+            <div class="m-name">林小满</div>
+            <div class="m-sub">
+              <span class="badge info">可编辑</span>
+              <span>指派 2 项</span>
+            </div>
+          </div>
+          <span class="role-select">
+            可编辑
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </li>
+        <li class="member">
+          <span class="avatar">陈</span>
+          <div class="m-main">
+            <div class="m-name">陈序</div>
+            <div class="m-sub">
+              <span class="badge normal">可查看</span>
+              <span>未指派</span>
+            </div>
+          </div>
+          <span class="role-select">
+            可查看
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </li>
+        <!-- 待接受邀请 -->
+        <li class="member">
+          <span class="avatar" style="background:transparent;border:1px dashed var(--border);color:var(--icon-muted)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>
+          </span>
+          <div class="m-main">
+            <div class="m-name" style="color:var(--text-secondary)">zhao@example.com</div>
+            <div class="m-sub"><span class="badge normal">待接受邀请</span></div>
+          </div>
+          <button type="button" class="btn-ghost" style="min-height:36px;color:var(--danger-fg)">撤销</button>
+        </li>
+      </ul>
+
+      <!-- 邀请入口：邮箱 / 链接 + 权限 -->
+      <div class="invite-row">
+        <div class="ctrl">
+          <svg class="adorn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+          <span class="ph">输入邮箱邀请…</span>
+        </div>
+        <span class="role-select" style="min-height:44px">
+          可编辑
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </span>
+        <button type="button" class="btn-ghost" aria-label="复制邀请链接">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          邀请链接
+        </button>
+      </div>
+    </section>
+
+    <!-- 右列：个人态 vs 共享态 对照 + 指派示意 -->
+    <div class="stack">
+      <section class="surface-card panel">
+        <div class="panel-head"><h3 class="panel-title">个人态 vs 共享态</h3></div>
+        <p class="panel-note">共享态多出成员头像、角色权限与指派；个人态仅自己可见、无成员概念。</p>
+        <div class="compare">
+          <div class="cmp-card">
+            <div class="cmp-head"><span class="swd" style="background:var(--cat-emerald)"></span>个人清单</div>
+            <div class="cmp-line"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>仅自己可见</div>
+            <div class="cmp-line"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>无成员 / 无指派</div>
+            <div class="cmp-line"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>即时本地生效</div>
+          </div>
+          <div class="cmp-card" style="border-color:var(--info-fg)">
+            <div class="cmp-head">
+              <span class="swd" style="background:var(--cat-red)"></span>共享清单
+              <span class="cmp-avs" style="margin-left:auto"><span class="av">我</span><span class="av">林</span><span class="av">陈</span></span>
+            </div>
+            <div class="cmp-line"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>3 名成员协作</div>
+            <div class="cmp-line"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>按角色控编辑权限</div>
+            <div class="cmp-line"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>任务可指派到人</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 指派示意：共享态任务行 -->
+      <section class="surface-card panel">
+        <div class="panel-head"><h3 class="panel-title">指派 · 共享态任务行</h3></div>
+        <p class="panel-note">共享清单中的任务行在到期徽标旁显示被指派人头像，点头像可改派。</p>
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 4px">
+          <span style="width:24px;height:24px;flex:none;border-radius:50%;border:1px solid var(--circle-border);background:var(--card-bg)"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:16px;line-height:1.4;color:var(--text)">采购周末食材</div>
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px">
+              <span class="badge" style="background:var(--soon-bg);color:var(--soon-fg)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                明天
+              </span>
+              <span class="badge" style="background:var(--input-bg);color:var(--text-secondary);padding-left:4px">
+                <span style="width:18px;height:18px;border-radius:50%;background:var(--avatar-bg);color:var(--avatar-fg);display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:600">林</span>
+                指派给 林小满
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="empty" style="padding:16px 16px 4px">
+          <div class="icon-wrap" style="opacity:.7">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>
+          </div>
+          <div class="et" style="font-size:14px">还没有共享清单</div>
+          <div class="es" style="font-size:12px">邀请家人或同事，把清单变成协作空间。</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- 待决说明：标签分类调色板尚未成令牌 -->
+  <div class="pending">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div class="txt"><b>占位待令牌（标签分类调色板）：</b>DESIGN.md 尚未把「标签分类色」定义为独立令牌。本稿的分类色（sky / emerald / amber / red / slate 的 <b>-500</b> 档，与 02 · 03 设计稿 swatch 逐字一致）为占位取值，仅复用既有语义 hue，未新造色系。最终分类调色板（档数、命名、暗色策略）归标签模块编码时确定并补入 DESIGN.md，届时本稿分类色随之替换。</div>
+  </div>
+
+  <div class="caption foot-note">跨端待办应用 · 标签与清单管理 · 令牌唯一事实源 DESIGN.md · 侧栏衔接 02 主窗壳 · 浅色 / 暗色成对</div>
+
+</div>
+</body>
+</html>
